@@ -2547,6 +2547,7 @@ adcash.com
 adcast.deviantart.com
 ad.cauly.co.kr
 adc.brandreachsys.com
+ad.cbsi.com
 ad.cctv.com
 adcdn.goo.ne.jp
 ad-cdn.technoratimedia.com
@@ -2637,6 +2638,7 @@ addirdisro.world
 ad.directmirror.com
 addirector.vindicosuite.com
 ad.directrev.com
+ad.disney.go.com
 addisonreedproperties.com
 ad-display.wikawika.xyz
 additcinggames.com
@@ -3910,6 +3912,7 @@ ads.eccentrix.com
 ads.ecircles.com
 ads.economist.com
 ads.ecrush.com
+ads-e-darwin.hulustream.com
 ad.se.doubleclick.net
 adsee.jp
 ad-seek.jp
@@ -4275,6 +4278,7 @@ adservrs.com
 adservrs.com.edgekey.net
 adserv.usps.com
 ads.espn.adsonar.com
+ads.espn.com
 ads.eu.criteo.com
 ads.eu.e-planning.net
 ads.eu.msn.com
@@ -4736,6 +4740,7 @@ ad-sp.biz
 adspcces.ero-advertising.com
 adsp.ciner.com.tr
 ads.pdbarea.com
+ads.peacocktv.com
 ads-pebblemedia.adhese.com
 ads.pebblemedia.adhese.com
 ads.pe.com
@@ -5126,6 +5131,7 @@ ads.vaildaily.com
 ads.valuead.com
 ads.vcnc.co.kr
 ads-v-darwin.hulu.com
+ads-v-darwin.hulustream.com
 ads.vegas.com
 ads.veloxia.com
 ads.ventivmedia.com
@@ -6611,6 +6617,7 @@ a-mobile.genieesspv.jp
 a.mobile.toboads.com
 amobil.online
 a.mobimagic.com
+amoeba.web.roku.com
 a.monetate.net
 amongstpah.com
 amontaravexapp.net
@@ -13975,6 +13982,7 @@ cloud.ondemandtracking.delivery
 cloudserver098095.home.pl
 cloudservice14.kingsoft-office-service.com
 cloudservice24.kingsoft-office-service.com
+cloudservices.roku.com
 cloudshare.nocoshop.ru
 cloudshare.uploadbox.world
 cloudsponcer.com
@@ -14880,6 +14888,7 @@ cooltisyntrixapp.com
 cooltisyntrix.net
 coolwebstats.com
 coop.crwdcntrl.net
+cooper.logs.roku.com
 cooptsheep.homes
 coorddisfi.world
 coordino.com
@@ -17579,6 +17588,7 @@ dsp.xapads.com
 dsp.youdao.com
 ds.reson8.com
 ds-s7.addthis.com.edgekey.net
+dss.disney.io
 ds.serving-sys.com
 d.sspcash.adxcore.com
 dstillery.com
@@ -21144,6 +21154,7 @@ fyxm.net
 f.zeroredirect2.com
 fzip.thanhnien.vn
 fz.tiansys.cn
+g00.oz.peacocktv.com
 g0l32.queensiteforapp.com
 g13v.prd.ads.aws.fwmrm.net
 g1.doubleclick.net
@@ -44625,6 +44636,7 @@ swizzzy7juice.info
 swordgoose.com
 sworkitads.herokuapp.com
 swrap.tradedoubler.com
+sw.roku.com
 swrve.com
 swsoft.122.2o7.net
 swtkes.com
@@ -49023,6 +49035,7 @@ video.adsparc.com
 video-ads.rubiconproject.com
 video-ads.rubiconproject.com-v1.edgekey.net
 video-ad-stats.googlesyndication.com
+video-ad-stats.nbcuni.com
 videoadstech.org
 video.alxbgo.com
 videoamp.com
