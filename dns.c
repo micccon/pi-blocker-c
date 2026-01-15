@@ -1,11 +1,12 @@
+#include <ctype.h>
+
 #include "dns.h"
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
 
 // Define globals
 char **g_blocklist = NULL;
 size_t g_blocklist_size = 0;
+
+// ---------- BLOCKLIST MANAGEMENT ----------
 
 // Comparison function to be used to for binary search
 // Expects pointers to string pointers (char**)
@@ -15,8 +16,6 @@ int compare_strings(const void *a, const void *b)
 	const char *sb = *(const char **)b;
 	return strcmp(sa, sb);
 }
-
-// --- BLOCKLIST MANAGEMENT ---
 
 // Frees each entry in the blocklist and the blocklist itself
 void free_blocklist()
@@ -120,7 +119,7 @@ bool is_blocked(char *host)
 	return false;
 }
 
-// --- DNS PARSER ---
+// ---------- DNS PARSER ----------
 
 // Reads the name of a domain
 unsigned char* read_name(unsigned char* reader, unsigned char* buffer, int* count)
@@ -129,7 +128,7 @@ unsigned char* read_name(unsigned char* reader, unsigned char* buffer, int* coun
 	if (!reader || !buffer || !count)
 	{
 		perror("Null / invalid arguments to read_name");
-		exit(1);
+		return NULL;
 	}
 
 	// Malloc name buffer
@@ -137,7 +136,7 @@ unsigned char* read_name(unsigned char* reader, unsigned char* buffer, int* coun
 	if (name == NULL)
 	{
 		perror("Unable to malloc for name in read_name");
-		exit(1);
+		return NULL;
 	}
 
 	*count = 0;
@@ -203,4 +202,105 @@ unsigned char* read_name(unsigned char* reader, unsigned char* buffer, int* coun
 	if (jumped == 0) *count += 1;
 
 	return (unsigned char*)name;
+}
+
+// ---------- DNS THREAD HANDLING ----------
+
+void* handle_dns_request(void *arg)
+{
+	// Convert argument into dns_task to access dns request info
+	dns_task_t *task = (dns_task_t *)arg;
+
+	// Skip 12-byte dns hdr to get to question section
+	unsigned char *reader = task->buffer + sizeof(struct dns_hdr);
+	int bytes_read = 0;
+
+	// Use helper to extract domain name
+	char *domain_name = (char *)read_name(reader, task->buffer, &bytes_read);
+
+	// Convert domain to lowercase
+	for (int i = 0; domain_name[i]; i++)
+		domain_name[i] = tolower(domain_name[i]);
+
+	// Refuse packet so client doesn't time out
+	if ( is_blocked(domain_name) )
+	{
+		printf("[BLOCKED] %s requested by %s\n", domain_name,
+					inet_ntoa(task->client_addr.sin_addr));
+
+		// Create a "Refused" response
+		struct dns_hdr *header = (struct dns_hdr *)task->buffer;
+		header->flags = htons(ntohs(header->flags) | DNS_FLAG_QR | 0x0005); // QR=1 (Response), RCODE=5 (Refused)
+
+		// Send the "Refused" header back to the client immediately
+		sendto(task->client_socket, task->buffer, task->query_size, 0,
+			(struct sockaddr *)&task->client_addr, sizeof(task->client_addr));
+	}
+	else // Is a normal packet
+    {
+        printf("[FORWARD] %s requested by %s\n", domain_name,
+                    inet_ntoa(task->client_addr.sin_addr));
+        
+        // Create thread-local upstream socket to avoid race conditions
+        int upstream_socket;
+        if ( (upstream_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0 )
+        {
+            perror("Upstream socket failed");
+            free(domain_name);
+            free(task);
+            return NULL;
+        }
+
+        // Send the query to the upstream provider (e.g., 8.8.8.8)
+        sendto(upstream_socket, task->buffer, task->query_size, 0,
+            (struct sockaddr *)&task->upstream_addr,
+            sizeof(task->upstream_addr));
+
+        // Use a thread-local buffer to prevent using the global upstream in main
+        unsigned char upstream_response[UPSTREAM_BUFFER_SIZE];
+        ssize_t response_size = recv_with_timeout(upstream_socket, upstream_response,
+            UPSTREAM_BUFFER_SIZE, 0, NULL, NULL, 2000);
+
+        if (response_size > 0)
+        {
+            // Send the successful response back to the client
+            sendto(task->client_socket, upstream_response, response_size, 0,
+                (struct sockaddr *)&task->client_addr, sizeof(task->client_addr));
+        }
+        else
+            printf("  [TIMEOUT] Upstream did not reply for %s\n", domain_name);
+
+        // Close local socket
+        close(upstream_socket);
+    }
+
+    // Final cleanup
+    free(domain_name);
+    free(task); 
+    return NULL;
+}
+
+// Receives a request without blocking after a certain period
+ssize_t recv_with_timeout(int sockfd, void *buf, size_t len, int flags,
+                        struct sockaddr *src_addr, socklen_t *addrlen, 
+                        int timeout_ms) 
+{
+
+	struct pollfd fds[1];
+	fds[0].fd = sockfd;
+	fds[0].events = POLLIN; // Notify when there is data to read
+
+	// Wait for 'timeout_ms' milliseconds
+	int activity = poll(fds, 1, timeout_ms);
+
+	if (activity == 0) // Timeout reached
+		return 0;
+	else if (activity < 0) // Actual poll error
+	{
+		perror("Poll error");
+		return -1;
+	}
+
+	// Data is ready and safe to call recvfrom.
+	return recvfrom(sockfd, buf, len, flags, src_addr, addrlen);
 }

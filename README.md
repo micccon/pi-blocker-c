@@ -1,214 +1,222 @@
 # Pi-Blocker 🛡️
 
-A lightweight DNS sinkhole written in C that blocks ads and tracking domains at the network level. Designed to run efficiently on a Raspberry Pi, protecting all devices on your local network.
+A high-performance, multi-threaded DNS sinkhole written in C that blocks ads and tracking domains at the network level. Runs efficiently on a Raspberry Pi Zero 2 W, protecting all devices on your local network.
 
-## Overview
+## Visual Results
+| Before Pi-Blocker | After Pi-Blocker |
+|-------------------|------------------|
+| ![Without blocking](images/without-pi-blocker.png) | ![With blocking](images/with-pi-blocker.png) |
 
-Pi-Blocker intercepts DNS queries from devices on your network, checks them against a blocklist of 70,000+ known advertising and tracking domains, and either forwards legitimate requests to an upstream DNS server or refuses blocked ones. This approach provides network-wide ad blocking without requiring software installation on individual devices.
+*Network-wide ad blocking - no software installation required on individual devices*
 
 ## Features
 
-- **Network-wide blocking**: Protects all devices connected to your network
-- **High-performance filtering**: Uses binary search on a sorted blocklist for O(log n) lookup speed
-- **Subdomain matching**: Blocks `ads.example.com` when `example.com` is on the blocklist
-- **DNS compression support**: Properly handles compressed DNS names (RFC 1035)
-- **Configurable upstream DNS**: Forward to any DNS server (defaults to Google's 8.8.8.8)
-- **Minimal resource usage**: Optimized for Raspberry Pi hardware
-- **Real-time logging**: See blocked and forwarded queries as they happen
+- **Multi-threaded**: POSIX threads handle concurrent queries without blocking
+- **Fast lookups**: Binary search on 70k+ domains (O(log n) performance)
+- **DNS compression**: RFC 1035 compliant packet parsing with pointer following
+- **Subdomain matching**: Blocks `ads.example.com` when `example.com` is listed
+- **Real-time logging**: Monitor blocked/forwarded queries as they happen
 
-## How It Works
+## Performance (Raspberry Pi Zero 2 W)
 
-1. **Receives** DNS queries from clients on your network (port 53)
-2. **Parses** the domain name from the DNS packet
-3. **Checks** if the domain matches the blocklist using binary search
-4. **Blocks** malicious queries by responding with DNS REFUSED (RCODE 5)
-5. **Forwards** legitimate queries to an upstream DNS server
-6. **Returns** the upstream response back to the client
+Tested with `dnsperf` - 100 concurrent connections, 30 seconds:
 
-## Installation
-
-### Prerequisites
-
-- Raspberry Pi (any model) or Linux system
-- GCC compiler
-- Root/sudo access (required to bind to port 53)
-
-### Build
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/pi-blocker.git
-cd pi-blocker
-
-# Compile
-make
-
-# Run (requires sudo for port 53)
-sudo ./pi-blocker
+```
+Queries per second:   747.59
+Queries completed:    23,072 (98.97%)
+Average Latency:      79.7ms (min 0.35ms)
+Memory usage:         ~15MB with 70k domains
 ```
 
-## Usage
-
-### Basic Usage
+## Quick Start
 
 ```bash
-# Use default upstream DNS (8.8.8.8)
+# Clone and build
+git clone https://github.com/yourusername/pi-blocker.git
+cd pi-blocker
+make
+
+# Run (default upstream: 8.8.8.8)
 sudo ./pi-blocker
 
-# Specify custom upstream DNS server
+# Or specify custom upstream DNS
 sudo ./pi-blocker 1.1.1.1
 ```
 
-### Configure Your Devices
+## Setup
 
-**Option 1: Network-wide (Recommended)**
+**Configure DNS on Windows:**
+1. **Settings** → **Network & Internet** → Click connection
+2. **Edit DNS** → **Manual** → **IPv4 On**
+3. Enter Pi's IP as **Preferred DNS** → **Save**
 
-Configure your router's DHCP settings to use your Raspberry Pi's IP address as the primary DNS server. This protects all devices automatically. Consult your router's documentation for specific steps.
+**Other systems**: Update DNS in network settings or edit `/etc/resolv.conf`
 
-**Option 2: Individual Device (Windows)**
+**Test**: `nslookup google.com YOUR_PI_IP` or browse the web normally
 
-1. Open **Settings** → **Network & Internet**
-2. Click on your connection (Wi-Fi or Ethernet)
-3. Click **Edit** next to DNS server assignment
-4. Select **Manual**
-5. Toggle **IPv4** to **On**
-6. Enter your Raspberry Pi's IP address as **Preferred DNS**
-7. Click **Save**
+## How It Works
 
-**Option 3: Individual Device (macOS/Linux)**
-
-Similar process through Network Settings, or edit `/etc/resolv.conf` to point to your Pi's IP.
-
-### Test It Out
-
-```bash
-# Test blocking (should fail or return refused)
-nslookup ads.example.com YOUR_PI_IP
-
-# Test allowed domain (should succeed)
-nslookup google.com YOUR_PI_IP
 ```
+Client Query → Spawn Thread → Parse Domain → Check Blocklist
+                                                ↓
+                                         Blocked? → Send REFUSED
+                                                ↓
+                                         Forward → Upstream DNS → Return Response
+```
+
+Each query runs in its own thread with a thread-local socket, preventing head-of-line blocking.
+
+## Architecture Highlights
+
+**Multi-threading**
+- Worker thread per query using `pthread_create()` and `pthread_detach()`
+- Thread-local upstream sockets eliminate race conditions
+- No mutexes needed - blocklist is read-only after load
+
+**DNS Parsing**
+- Handles label compression with jump protection (max 100 loops)
+- Buffer overflow protection on name reads
+- Case-insensitive domain matching
+
+**Blocklist Engine**
+- Binary search: O(log n) lookups in microseconds
+- Hierarchical matching: blocks subdomains automatically
+- 70k+ domains from [Steven Black's unified hosts](https://github.com/StevenBlack/hosts)
 
 ## Project Structure
 
 ```
 pi-blocker/
-├── main.c              # Server loop, socket handling, request forwarding
-├── dns.c               # DNS parsing, blocklist management
-├── dns.h               # Constants, structures, function declarations
-├── Makefile            # Build configuration
-└── hostnames/
-    └── blocklist.txt   # 70,000+ blocked domains (one per line, sorted)
-    └── random_domains.txt # List of 10k domains for benchmarking
+├── main.c          # Socket setup, thread spawning
+├── dns.c           # Parsing, blocklist, request handling
+├── dns.h           # Structs and constants
+├── Makefile
+├── hostnames/
+    ├── blocklist.txt              # 70k+ domains (sorted)
+    ├── random-domains.txt         # List of 10k domains
+    └── random-domains-dnsperf.txt # Benchmark dataset
+└── images/
+    ├── with-pi-blocker.png
+    └── without-pi-blocker.png
 ```
-
-## Technical Highlights
-
-### DNS Packet Parsing
-- Implements RFC 1035 DNS message format parsing
-- Handles DNS name compression (pointer following with jump protection)
-- Supports standard label encoding
-- Buffer overflow protection and malformed packet handling
-
-### Efficient Blocklist Searching
-- Binary search algorithm for O(log n) lookups
-- Hierarchical domain matching (blocks all subdomains)
-- In-memory storage for fast access
-- Pre-sorted blocklist for optimal performance
-
-### Network Architecture
-- UDP socket programming with dual-socket design
-- Non-blocking upstream queries with timeout protection
-- Proper network byte order handling (ntohs/htons)
-- Poll-based timeout mechanism to prevent server hangs
 
 ## Configuration
 
-### Blocklist
-
-The blocklist is located in `hostnames/blocklist.txt` and uses domains from [Steven Black's unified hosts file](https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts).
-
-To update your blocklist:
-
+**Update Blocklist:**
 ```bash
-# Download the latest hosts file
 curl -o hosts.txt https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
-
-# Extract domains (skip IP mappings, comments, and localhost)
 grep "^0.0.0.0" hosts.txt | awk '{print $2}' | grep -v "^0.0.0.0$" | grep -v "^localhost$" > hostnames/blocklist.txt
-
-# Sort alphabetically (required for binary search)
 sort -u hostnames/blocklist.txt -o hostnames/blocklist.txt
 ```
 
-Format (one domain per line):
+**Benchmark:**
+```bash
+sudo apt-get install dnsperf
+dnsperf -s YOUR_PI_IP -l 30 -Q 1000 -n 100 -d hostnames/random-domains-dnsperf.txt
 ```
-ads.example.com
-tracker.another-site.com
-analytics.website.org
+
+## Technical Deep Dive
+
+### Thread Safety Strategy
+
+**The Challenge**: Multiple threads accessing shared resources (blocklist, sockets) simultaneously.
+
+**The Solution**:
+- **Read-only blocklist**: Loaded once at startup, never modified → safe for concurrent reads without locks
+- **Thread-local upstream sockets**: Each worker thread creates its own socket → eliminates contention
+- **Independent task structs**: Each thread receives a private `dns_task_t` with query data
+- **No shared mutable state**: Zero mutexes or atomic operations needed
+
+### Memory Management
+
+**Query Lifecycle**:
+1. Main thread allocates `dns_task_t` with `calloc()` and copies query data
+2. Worker thread spawned and detached with `pthread_detach()`
+3. Thread parses domain (returns malloc'd string) and processes query
+4. Thread frees domain string and task struct before exit
+5. OS reclaims thread resources automatically
+
+**Blocklist**: Array of 70k+ string pointers (~15MB total), loaded once at startup, freed on shutdown.
+
+### DNS Packet Parsing
+
+DNS packets use **pointer compression** (RFC 1035) to reduce size:
+- **Labels**: `3www6google3com0` (length-prefixed segments)
+- **Pointers**: `0xC00C` (jump to offset 12 in packet)
+
+**Safety mechanisms**:
+```c
+// Detect pointer: top 2 bits = 11
+if ((*reader & 0xC0) == 0xC0) {
+    int offset = ((*reader & 0x3F) << 8) | *(reader + 1);
+    reader = buffer + offset;
+}
+```
+- `MAX_LOOP_COUNT` (100) prevents infinite loops from malicious packets
+- Buffer overflow checks before every memory operation
+
+### Blocklist Search Algorithm
+
+**Binary Search**: O(log n) lookups via `bsearch()` - 70k domains checked in ~16 comparisons
+
+**Hierarchical Matching**: Walks up domain tree checking each level
+```
+ads.doubleclick.net → check "ads.doubleclick.net"
+                    → check "doubleclick.net" (BLOCKED!)
 ```
 
-**Important**: The blocklist must be sorted alphabetically for binary search to work.
+### Network Architecture
 
-### Customization
+**Dual Socket Design**:
+- **Client socket**: Bound to port 53, shared (read-only) for `sendto()` responses
+- **Upstream sockets**: Each thread creates its own for upstream queries
 
-Key constants in `dns.h`:
+**Why separate upstream sockets?** Prevents threads from stealing each other's responses on `recvfrom()`.
 
-- `DNS_BUFFER_SIZE`: Buffer for client queries (512 bytes)
-- `UPSTREAM_BUFFER_SIZE`: Buffer for upstream responses (65536 bytes)
-- `DNS_NAME_SIZE`: Maximum domain name length (256 bytes)
+**Timeout Protection**: Uses `poll()` with 2-second timeout to avoid blocking on dead upstream servers.
 
-## Performance
+### Error Handling
 
-On a Raspberry Pi 4:
-- ~0.1ms lookup time per query
-- Handles hundreds of queries per second
-- Minimal memory footprint (~10-15 MB with full blocklist)
-- Near-zero CPU usage when idle
+**Fail gracefully** - bad input never crashes the server:
+- Malformed packets (<12 bytes): Silently dropped
+- Thread creation failures: Logged, server continues
+- Upstream timeouts: No response sent to client
+- Memory allocation failures: Query skipped, resources freed
 
-## Limitations
+### Performance Optimizations
 
-- IPv4 only (no IPv6 support currently)
-- UDP only (no DNS-over-HTTPS/TLS)
-- Single-threaded (handles one query at a time)
-- No caching mechanism
-
-## Future Improvements
-
-- [ ] Add DNS query caching to reduce upstream requests
-- [ ] Implement IPv6 support
-- [ ] Multi-threading for concurrent query handling
-- [ ] Web interface for statistics and management
-- [ ] Whitelist support for overriding blocks
-- [ ] Custom block page redirect option
+1. **Pre-sorted blocklist**: Avoids O(n log n) sort at startup
+2. **Binary search**: O(log n) vs O(n) linear scan
+3. **In-memory storage**: No disk I/O during queries
+4. **Thread-per-query**: Simple model, sufficient for <1000 QPS
+5. **Minimal copying**: Pass pointers, copy only when necessary
 
 ## Troubleshooting
 
-**Permission denied on port 53:**
-```bash
-sudo ./pi-blocker  # Must run as root
-```
+| Issue | Solution |
+|-------|----------|
+| Permission denied | `sudo ./pi-blocker` (port 53 requires root) |
+| Nothing blocked | Verify `hostnames/blocklist.txt` exists and is sorted |
+| Queries timeout | Check upstream reachable: `ping 8.8.8.8` |
+| High memory | Expected (~15MB with 70k domains) |
 
-**No domains being blocked:**
-- Verify blocklist exists at `hostnames/blocklist.txt`
-- Ensure blocklist is sorted alphabetically
-- Check that domains are lowercase in the file
+## Future Enhancements
 
-**Queries timing out:**
-- Check upstream DNS server is reachable
-- Verify no firewall is blocking outbound UDP port 53
-- Try a different upstream DNS server
-
-## License
-
-This project is open source and available under the MIT License.
+- DNS caching (Redis/LRU)
+- IPv6 support
+- DNS-over-HTTPS/TLS
+- Web dashboard with statistics
+- Whitelist support
+- Docker containerization
 
 ## Acknowledgments
 
-- Blocklist from [Steven Black's unified hosts file](https://github.com/StevenBlack/hosts) - a consolidated collection of reputable host files
-- Inspired by Pi-hole and other DNS sinkhole projects
-- Built as a portfolio project to demonstrate C networking and systems programming
+- Blocklist: [Steven Black's unified hosts](https://github.com/StevenBlack/hosts)
+- Test domains: [OpenDNS public lists](https://github.com/opendns/public-domain-lists)
+- Inspired by Pi-hole
+
+Built as a portfolio project demonstrating C systems programming, multi-threading, network protocols, and performance optimization.
 
 ---
 
-**Note**: This is an educational project. For production use, consider established solutions like Pi-hole which offer additional features, web interfaces, and community support.
+**License**: MIT | **Note**: Educational project - for production use, consider [Pi-hole](https://pi-hole.net/)

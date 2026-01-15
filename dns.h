@@ -1,9 +1,18 @@
 #ifndef DNS_H
 #define DNS_H
 
-#include <stdint.h> // Required for uint16_t
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <poll.h>
+#include <pthread.h>
 
 // Masks for the Flags field
 #define DNS_FLAG_QR     0x8000  // 1000 0000 0000 0000 (The very first bit)
@@ -26,6 +35,8 @@
 extern char **g_blocklist;
 extern size_t g_blocklist_size;
 
+// -------------------------- DNS STRUCTS -----------------------------
+
 /* * DNS Header Structure (RFC 1035)
  * Total Size: 12 Bytes
  * All fields are 16-bit integers (uint16_t)
@@ -42,6 +53,19 @@ struct dns_hdr {
     uint16_t arcount;     // Additional Count: How many "Extra" records (like glue records) are included?
 };
 
+/**
+ * Data structure used to pass context to worker threads.
+ * Since pthread_create only accepts a single pointer argument, this struct 
+ * bundles everything a thread needs to process a DNS request independently.
+ */
+typedef struct {
+    int client_socket;                      // The port we listen on
+    struct sockaddr_in client_addr;         // Who sent the request
+    unsigned char buffer[DNS_BUFFER_SIZE];  // Buffer for DNS queries
+    ssize_t query_size;                     // Size of the DNS buffer
+    struct sockaddr_in upstream_addr;       // Pre-configured Google/Cloudflare addr
+} dns_task_t;
+
 // -------------------------- DNS PARSER -----------------------------
 
 /**
@@ -57,6 +81,39 @@ struct dns_hdr {
  * WARNING: The caller is responsible for freeing this memory!
  */
 unsigned char* read_name(unsigned char* reader, unsigned char* buffer, int* count);
+
+// -------------------------- DNS THREAD HANDLING -----------------------------
+
+/**
+ * The entry point for worker threads handling individual DNS queries.
+ * * This function runs in its own thread to prevent "Head-of-Line Blocking."
+ * It parses the domain, checks the blocklist, and either sends a REFUSED 
+ * response or forwards the query to the upstream server via a thread-local socket.
+ *
+ * @param arg A pointer to a dns_task_t structure (must be cast to void*).
+ * @return NULL upon completion. This function is responsible for freeing 'arg'.
+ */
+void* handle_dns_request(void* arg);
+
+/**
+ * Receives data from a socket with a safety timeout mechanism.
+ * * Unlike standard recvfrom(), this function will not block indefinitely.
+ * It uses poll() to wait for data availability. If no data arrives within
+ * the specified timeout, it returns immediately, preventing server hangs.
+ *
+ * @param sockfd      The file descriptor of the open socket.
+ * @param buf         Buffer to store the received data.
+ * @param len         Maximum size of the buffer (in bytes).
+ * @param flags       Standard recvfrom flags (usually 0).
+ * @param src_addr    Pointer to store the sender's address (IP/Port).
+ * @param addrlen     Pointer to the size of the src_addr structure.
+ * @param timeout_ms  Maximum time to wait in milliseconds (e.g., 2000 for 2s).
+ * * @return Number of bytes received on success.
+ * @return -1 if the timeout was reached or a poll error occurred.
+ */
+ssize_t recv_with_timeout(int sockfd, void *buf, size_t len, int flags,
+                        struct sockaddr *src_addr, socklen_t *addrlen, 
+                        int timeout_ms);
 
 // -------------------------- BLOCKLIST ENGINE -----------------------------
 
