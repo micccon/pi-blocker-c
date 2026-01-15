@@ -208,7 +208,8 @@ ads.doubleclick.net → check "ads.doubleclick.net"
 - Web dashboard with statistics
 - Whitelist support
 - Docker containerization
-
+- Blocking of masked ads (ex. ad in the center of both example images)
+  
 ## Acknowledgments
 
 - Blocklist: [Steven Black's unified hosts](https://github.com/StevenBlack/hosts)
