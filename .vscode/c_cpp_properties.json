@@ -1,0 +1,29 @@
+{
+    "configurations": [
+        {
+            "name": "WSL",
+            "compilerPath": "/usr/bin/gcc",
+            "intelliSenseMode": "linux-gcc-x64",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "includePath": [
+                "/usr/lib/gcc/x86_64-linux-gnu/13/include",
+                "/usr/local/include",
+                "/usr/include/x86_64-linux-gnu",
+                "/usr/include",
+                "${workspaceFolder}/**"
+            ],
+            "browse": {
+                "limitSymbolsToIncludedHeaders": true,
+                "path": [
+                    "${workspaceFolder}",
+                    "/usr/lib/gcc/x86_64-linux-gnu/13/include",
+                    "/usr/local/include",
+                    "/usr/include",
+                    "/usr/include/x86_64-linux-gnu"
+                ]
+            }
+        }
+    ],
+    "version": 4
+}

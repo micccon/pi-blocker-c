@@ -12,7 +12,6 @@ int main(int argc, char *argv[])
 	load_blocklist("hostnames/blocklist.txt");
 
 	printf("Starting DNS Proxy Server...\n");
-	printf("Forwarding non-blocked queries to: %s\n", upstream_ip);
 
 	// Declare socket
 	int client_socket;
