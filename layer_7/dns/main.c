@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
 	while(1) 
 	{
 		// Allocate memory for new DNS task
-		dns_task_t *task = calloc(sizeof(dns_task_t), 1);
+		dns_task_t *task = calloc(1, sizeof(dns_task_t));
 		if (!task)
 		{
 			perror("Calloc failed for DNS task");

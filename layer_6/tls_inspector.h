@@ -67,6 +67,8 @@
 
 // what port does HTTPS run on?
 #define HTTPS_PORT                      443
+// HTTPS over explicit proxy (CONNECT tunnel payload on proxy listener)
+#define HTTP_PROXY_PORT                 8080
 
 // reuse hostname max length from RFC 1035
 #define TLS_MAX_HOSTNAME_LEN            253

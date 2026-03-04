@@ -46,9 +46,10 @@ void start_tls_inspector()
             continue;
         }
 
-        // --- filter port 443 only ---
+        // --- filter TLS on direct 443 and proxy 8080 ---
         struct tcp_hdr *tcp_header = (struct tcp_hdr *)(task->buffer + ip_hdr_len);
-        if (ntohs(tcp_header->dst_port) != HTTPS_PORT)
+        uint16_t dst_port = ntohs(tcp_header->dst_port);
+        if (dst_port != HTTPS_PORT && dst_port != HTTP_PROXY_PORT)
         {
             free(task);
             continue;
