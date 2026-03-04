@@ -2,122 +2,88 @@
 #include <time.h>
 
 #include "dns.h"
+#include "../../common/blocklist.h"
 
-// Define globals
-char **g_blocklist = NULL;
-size_t g_blocklist_size = 0;
-
-// ---------- BLOCKLIST MANAGEMENT ----------
-
-// Comparison function to be used to for binary search
-// Expects pointers to string pointers (char**)
-int compare_strings(const void *a, const void *b)
+void start_dns_server(const char *upstream_ip)
 {
-	const char *sa = *(const char **)a;
-	const char *sb = *(const char **)b;
-	return strcmp(sa, sb);
-}
-
-// Frees each entry in the blocklist and the blocklist itself
-void free_blocklist()
-{
-	if (g_blocklist)
-	{
-		for (size_t i = 0; i < g_blocklist_size; i++)
-			free(g_blocklist[i]);
-		free(g_blocklist);
-	}
-}
-
-// Loads text file of domains into memory and prepares them
-// Assumes file is already sorted
-void load_blocklist(const char *filename)
-{
-	FILE *file = fopen(filename, "r");
-	if (!file)
-	{
-		perror("Could not open blocklist.txt");
-		return;
-	}
-
-	// Counts lines to allocate exact memory
-	size_t lines = 0;
-	char buffer[BLOCKLIST_LINE_BUFFER];
-	while ( fgets(buffer, sizeof(buffer), file) )
-		lines++;
-
-	rewind(file); // Go back to beginning of file
-
-	// Allocate the main pointer array
-	g_blocklist = calloc(lines, sizeof(char*));
-	if (!g_blocklist)
-	{
-		perror("Out of memory loading blocklist");
+	// Declare socket
+	int client_socket;
+	if ( (client_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+		perror("Initializing socket failed");
 		exit(1);
 	}
 
-	// Read and store each domain
-	size_t i = 0;
-	while ( fgets(buffer, sizeof(buffer), file) && i < lines)
+	// Server socket creation and setup
+	struct sockaddr_in server_addr;
+	memset(&server_addr, 0, sizeof(server_addr));
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(DNS_PORT);
+	server_addr.sin_addr.s_addr = INADDR_ANY;
+
+	// Bind the client socket
+	if ( ( bind(client_socket, (const struct sockaddr *)&server_addr,
+				sizeof(server_addr)) ) < 0 ) {
+		perror("Couldn't bind client socket");
+		close(client_socket);
+		exit(1);
+	}
+
+	// Upstream address (where we forward valid requests)
+	struct sockaddr_in upstream_addr;
+	memset(&upstream_addr, 0, sizeof(upstream_addr));
+	upstream_addr.sin_family = AF_INET;
+	upstream_addr.sin_port = htons(DNS_PORT);
+
+	// Convert upstream ip to compact binary
+	if (inet_pton(AF_INET, upstream_ip, &upstream_addr.sin_addr) <= 0) {
+		perror("Invalid upstream IP address");
+		close(client_socket);
+		exit(1);
+	}
+
+	printf("Pi-Blocker is listening on 0.0.0.0:%d (All Interfaces)\n", DNS_PORT);
+	printf("Waiting for incoming DNS queries...\n");
+
+	// Main loop process
+	while(1)
 	{
-		// Strip newline character
-		buffer[strcspn(buffer, "\r\n")] = 0;
-
-		// Skip any potential empty lines
-		if (strlen(buffer) == 0) continue;
-
-		// Allocate ram for this specific string
-		if ( (g_blocklist[i] = strdup(buffer)) == NULL )
+		// Allocate memory for new DNS task
+		dns_task_t *task = calloc(1, sizeof(dns_task_t));
+		if (!task)
 		{
-			fclose(file);
-			free_blocklist();
-			perror("Failure to allocate memory for specific string");
-			exit(1);
+			perror("Calloc failed for DNS task");
+			continue; // Keep going on for new requests n that
 		}
 
-		i++;
+		task->client_socket = client_socket;
+		task->upstream_addr = upstream_addr;
+		socklen_t client_addr_len = sizeof(task->client_addr);
+
+		// Receive packet into the task buffer
+		task->query_size = recvfrom(client_socket, task->buffer, DNS_BUFFER_SIZE,
+			0, (struct sockaddr *)&task->client_addr, &client_addr_len);
+
+		// Drop junk packet
+		if (task->query_size < (ssize_t)sizeof(struct dns_hdr))
+		{
+			free(task);
+			continue;
+		}
+
+		if (DNS_VERBOSE_RX) {
+			printf("Received a %zd-byte packet from %s\n",
+				task->query_size, inet_ntoa(task->client_addr.sin_addr));
+		}
+
+		// Create new worked thread
+		pthread_t thread_id;
+		if (pthread_create(&thread_id, NULL, handle_dns_request, task) != 0)
+		{
+			perror("Failed to create pthread");
+			free(task);
+		}
+		pthread_detach(thread_id);
 	}
-
-	fclose(file);
-	g_blocklist_size = i;
-
-	// We assume the file is sorted, if you didn't sort externally uncomment this line
-	// qsort(g_blocklist, g_blocklist_size, sizeof(char*), compare_strings);
-
-	printf("Blocklist loaded: %zu domains active.\n", g_blocklist_size);
-}
-
-// Helper to perform the actual bsearch call
-bool check_domain(const char *domain)
-{
-	if (!g_blocklist || g_blocklist_size == 0) return false;
-
-	// Note: Use 'domain' directly if your compare_strings expects a char*
-	void *found = bsearch(&domain, g_blocklist, g_blocklist_size,
-		sizeof(char*), compare_strings);
-	return (found != NULL);
-}
-
-// Checks if the given host is on the blocklist or not
-bool is_blocked(char *host)
-{
-	// Check domain given first
-	if ( check_domain(host) ) return true;
-
-	// Walk up the domain tree
-	char *dot = strchr(host, '.');
-	while (dot != NULL)
-	{
-		// Move past current dot to next level
-		char *parent_domain = dot + 1;
-
-		// Get new dot, if no more dots (e.g ".com") break
-		dot = strchr(parent_domain, '.');
-		if (!dot) break;
-
-		if ( check_domain(parent_domain) ) return true;
-	}
-	return false;
 }
 
 void log_dns_decision(const char *action, const char *domain, const struct sockaddr_in *client_addr)

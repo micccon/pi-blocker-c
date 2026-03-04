@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2
 LDFLAGS = -lpthread
-SRC = main.c proxy.c ../dns/dns.c
+SRC = main.c proxy.c ../../common/blocklist.c
 TARGET = http-proxy
 
 all: $(TARGET)

@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "proxy.h"
-#include "../dns/dns.h"  // for blocklist functions and is_blocked()
+#include "../../common/blocklist.h"
 #include <netdb.h>       // for getaddrinfo and struct addrinfo
 #include <ctype.h>
 #include <strings.h>

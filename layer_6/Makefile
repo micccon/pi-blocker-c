@@ -1,7 +1,7 @@
 CC     = gcc
 CFLAGS = -Wall -Wextra -pthread
 
-SRC    = main.c tls_inspector.c ../layer_7/dns/dns.c
+SRC    = main.c tls_inspector.c ../common/blocklist.c
 TARGET = tls-inspector
 
 all: $(TARGET)

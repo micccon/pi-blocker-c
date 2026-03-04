@@ -1,12 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "proxy.h"
-#include "../dns/dns.h"  // for blocklist functions and is_blocked()
+#include "../../common/blocklist.h"
 
 int main(void)
 {
     // --- load the blocklist ---
-    load_blocklist("../../hostnames/blocklist.txt");
+    if (load_blocklist("../../hostnames/blocklist.txt") != 0)
+        return 1;
 
     printf("HTTP Proxy Server is starting...\n");
     printf("Listening on port 8080\n");

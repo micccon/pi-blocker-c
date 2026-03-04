@@ -1,12 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "tls_inspector.h"
-#include "../layer_7/dns/dns.h"  // for blocklist functions and is_blocked()
+#include "../common/blocklist.h"
 
 int main(void)
 {
     // --- load blocklist ---
-    load_blocklist("../hostnames/blocklist.txt");
+    if (load_blocklist("../hostnames/blocklist.txt") != 0)
+        return 1;
 
     // --- print startup info ---
     printf("[LAYER_6] Starting TLS Inspector on port 443\n");

@@ -3,7 +3,7 @@
 #endif
 
 #include "tls_inspector.h"
-#include "../layer_7/dns/dns.h"  // for is_blocked()
+#include "../common/blocklist.h"
 #include "../common/net_hdrs.h"  // for struct ip_hdr and struct tcp_hdr
 #include <ctype.h>
 

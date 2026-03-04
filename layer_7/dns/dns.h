@@ -28,14 +28,11 @@
 #define DNS_BUFFER_SIZE 512
 #define DNS_NAME_SIZE 256
 #define UPSTREAM_BUFFER_SIZE 65536
-#define BLOCKLIST_LINE_BUFFER 256
+#define DNS_DEFAULT_UPSTREAM "8.8.8.8"
+#define DNS_VERBOSE_RX 0
 #define MAX_LOOP_COUNT 100
 #define JUMP_HEX_VALUE 0xC0
 #define FIRST_OFFSET_HEX_VALUE 0x3F
-
-// Global blocklist variables
-extern char **g_blocklist;
-extern size_t g_blocklist_size;
 
 // -------------------------- DNS STRUCTS -----------------------------
 
@@ -82,6 +79,16 @@ unsigned char* read_name(unsigned char* reader, unsigned char* buffer, int* coun
 void* handle_dns_request(void* arg);
 
 /**
+ * Starts the Layer 7 DNS filter service:
+ * - binds UDP socket on DNS_PORT
+ * - receives client DNS queries
+ * - dispatches each query to handle_dns_request() in a worker thread
+ *
+ * @param upstream_ip Upstream resolver IPv4 string (e.g. "8.8.8.8")
+ */
+void start_dns_server(const char *upstream_ip);
+
+/**
  * Receives data from a socket with a safety timeout mechanism.
  * * Unlike standard recvfrom(), this function will not block indefinitely.
  * It uses poll() to wait for data availability. If no data arrives within
@@ -100,29 +107,6 @@ void* handle_dns_request(void* arg);
 ssize_t recv_with_timeout(int sockfd, void *buf, size_t len, int flags,
                         struct sockaddr *src_addr, socklen_t *addrlen, 
                         int timeout_ms);
-
-// -------------------------- BLOCKLIST ENGINE -----------------------------
-
-/**
- * Loads a text file of domains into memory and prepares them for searching.
- * Expects a file with one domain per line.
- * * @param filename The path to the blocklist file (e.g., "blocklist.txt").
- */
-void load_blocklist(const char *filename);
-
-/**
- * Checks if a hostname exists in the loaded blocklist.
- * Uses Binary Search for high performance.
- * @param host The hostname to check (e.g., "ads.google.com").
- * @return TRUE if the host is BLOCKED, FALSE if ALLOWED.
- */
-bool is_blocked(char *host);
-
-/**
- * Frees all memory associated with the blocklist.
- * Call this before the program exits to be clean.
- */
-void free_blocklist();
 
 /**
  * Structured DNS decision logger.

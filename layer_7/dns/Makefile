@@ -5,8 +5,8 @@ TARGET = dns-filter
 
 all: $(TARGET)
 
-$(TARGET): main.c dns.c
-	$(CC) $(CFLAGS) main.c dns.c -o $(TARGET) $(LDFLAGS)
+$(TARGET): main.c dns.c ../../common/blocklist.c
+	$(CC) $(CFLAGS) main.c dns.c ../../common/blocklist.c -o $(TARGET) $(LDFLAGS)
 
 clean:
 	rm -f $(TARGET)
