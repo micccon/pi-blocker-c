@@ -1,3 +1,7 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "tls_inspector.h"
 #include "../layer_7/dns/dns.h"  // for is_blocked()
 #include "../common/net_hdrs.h"  // for struct ip_hdr and struct tcp_hdr
@@ -13,54 +17,65 @@ void start_tls_inspector()
         exit(1);
     }
 
-    // --- no bind, no listen, no accept ---
-    // --- passive sniffing ---
     printf("TLS Inspector listening on all interfaces (port 443 traffic)\n");
     printf("D3FEND: D3-TLSIC | ATT&CK: T1573\n");
-
 
     // --- capture loop ---
     while (1)
     {
-        // allocate task for this packet
-        // same calloc pattern as DNS and HTTP
+        // --- minimum size check ---
         tls_task_t *task = calloc(1, sizeof(tls_task_t));
-        if (!task) { continue; }
+        if (!task) continue;
 
-        // receive raw packet into task->buffer
+        // --- receive raw packet ---
         socklen_t addr_len = sizeof(task->src_addr);
         task->packet_len = recvfrom(raw_fd, task->buffer, TLS_BUFFER_SIZE, 0,
-                                    (struct sockaddr*)&task->src_addr, &addr_len);
+                                    (struct sockaddr *)&task->src_addr, &addr_len);
         if (task->packet_len < 0)
         {
             free(task);
             continue;
         }
 
-        // --- filter for port 443 only ---
+        // --- validate and parse IP header ---
         struct ip_hdr *ip_header = (struct ip_hdr *)task->buffer;
         size_t ip_hdr_len = (ip_header->version_ihl & 0x0F) * 4;
-        
-        struct tcp_hdr *tcp_header = (struct tcp_hdr *)(task->buffer + ip_hdr_len);
-        uint16_t dest_port = ntohs(tcp_header->dst_port);
+        if (ip_hdr_len < 20 || (int)ip_hdr_len > task->packet_len)
+        {
+            free(task);
+            continue;
+        }
 
-        if (dest_port != HTTPS_PORT)
+        // --- filter port 443 only ---
+        struct tcp_hdr *tcp_header = (struct tcp_hdr *)(task->buffer + ip_hdr_len);
+        if (ntohs(tcp_header->dst_port) != HTTPS_PORT)
         {
             free(task);
             continue;
         }
-        
-        // --- check if this is a TLS ClientHello ---
+
+        // --- validate TCP header ---
         size_t tcp_hdr_len = ((tcp_header->data_offset & 0xF0) >> 4) * 4;
-        if (!(is_tls_client_hello(task->buffer + ip_hdr_len + tcp_hdr_len,
-                              task->packet_len - ip_hdr_len - tcp_hdr_len)))
+        if (tcp_hdr_len < 20 || (int)(ip_hdr_len + tcp_hdr_len) > task->packet_len)
         {
             free(task);
             continue;
         }
+
+        // --- fast filter: is this a TLS ClientHello? ---
+        unsigned char *tls_start = task->buffer + ip_hdr_len + tcp_hdr_len;
+        int tls_len = task->packet_len - (int)ip_hdr_len - (int)tcp_hdr_len;
+
+        if (!is_tls_client_hello(tls_start, tls_len))
+        {
+            free(task);
+            continue;
+        }
+
+        // --- store raw_fd for RST injection (implement after Layer 4) ---
+        task->raw_fd = raw_fd;
 
         // --- spawn thread ---
-        // same pthread_create + pthread_detach pattern as DNS and HTTP
         pthread_t thread_id;
         if (pthread_create(&thread_id, NULL, handle_tls_packet, task) != 0)
         {
@@ -74,7 +89,7 @@ void start_tls_inspector()
 int is_tls_client_hello(unsigned char *buffer, int len)
 {
     // --- minimum size check ---
-    if (len < TLS_RECORD_HEADER_SIZE + TLS_HANDSHAKE_HEADER_SIZE)
+    if (!buffer || len < TLS_RECORD_HEADER_SIZE + TLS_HANDSHAKE_HEADER_SIZE)
         return 0;
 
     // --- check content type ---
@@ -83,203 +98,380 @@ int is_tls_client_hello(unsigned char *buffer, int len)
         return 0;
 
     // --- check handshake type ---
-    struct tls_handshake_hdr *handshake_hdr = (struct tls_handshake_hdr *)(buffer + TLS_RECORD_HEADER_SIZE);
+    struct tls_handshake_hdr *handshake_hdr =
+        (struct tls_handshake_hdr *)(buffer + TLS_RECORD_HEADER_SIZE);
     if (handshake_hdr->handshake_type != TLS_HANDSHAKE_CLIENT_HELLO)
         return 0;
 
-    return 1; // it's a ClientHello
+    return 1;
 }
 
 int extract_sni(unsigned char *buffer, int len,
-                char *hostname, int hostname_len)
+                        char *hostname, int hostname_len)
 {
-    // --- set up pointer to start of ClientHello body ---
-    // skip TLS record header (5 bytes) + handshake header (4 bytes)
+    // --- initial checks ---
+    if (!buffer || !hostname || hostname_len <= 1)
+        return -1;
+
     int pos = TLS_RECORD_HEADER_SIZE + TLS_HANDSHAKE_HEADER_SIZE;
 
-    // --- bounds check helper ---
-    #define CHECK_BOUNDS(bytes_needed) \
-    do { \
-        if (pos + (bytes_needed) > len) \
-            return -1; \
-    } while (0)
-
-    // --- skip fixed size fields ---
-    // legacy_version: 2 bytes
-    CHECK_BOUNDS(2);
-    pos += 2;
-
-    // random: always exactly 32 bytes (RFC 8446 section 4.1.2)
-    CHECK_BOUNDS(32);
-    pos += 32;
+    // skip legacy_version (2) + random (32)
+    CHECK_BOUNDS(pos, 2 + 32, len);
+    pos += 2 + 32;
 
     // --- skip session_id ---
-    // read 1 byte length, then skip that many bytes
-    CHECK_BOUNDS(1);
+    CHECK_BOUNDS(pos, 1, len);
     uint8_t session_id_len = buffer[pos];
-    CHECK_BOUNDS(1 + session_id_len);
+    CHECK_BOUNDS(pos, 1 + session_id_len, len);
     pos += 1 + session_id_len;
 
     // --- skip cipher_suites ---
-    // read 2 byte length (big endian!), then skip that many bytes
-    // use ntohs() or manual shift: (buffer[pos] << 8) | buffer[pos+1]
-    CHECK_BOUNDS(2);
+    CHECK_BOUNDS(pos, 2, len);
     uint16_t cipher_suites_len = ntohs(*(uint16_t *)(buffer + pos));
-    CHECK_BOUNDS(2 + cipher_suites_len);
+    CHECK_BOUNDS(pos, 2 + cipher_suites_len, len);
     pos += 2 + cipher_suites_len;
 
     // --- skip compression methods ---
-    // read 1 byte length, then skip that many bytes
-    CHECK_BOUNDS(1);
+    CHECK_BOUNDS(pos, 1, len);
     uint8_t compression_len = buffer[pos];
-    CHECK_BOUNDS(1 + compression_len);
+    CHECK_BOUNDS(pos, 1 + compression_len, len);
     pos += 1 + compression_len;
 
     // --- read extensions length ---
-    // 2 bytes, big endian
-    CHECK_BOUNDS(2);
+    CHECK_BOUNDS(pos, 2, len);
     uint16_t extensions_len = ntohs(*(uint16_t *)(buffer + pos));
     pos += 2;
-    CHECK_BOUNDS(extensions_len);
-
-    // extensions_end marks where extensions stop
+    CHECK_BOUNDS(pos, extensions_len, len);
     int extensions_end = pos + extensions_len;
 
-    // --- walk through extensions looking for SNI ---
-    // each extension looks like:
-    //   extension_type   2b
-    //   extension_length 2b
-    //   extension_data   variable
-
+    // walk extensions
     while (pos + 4 <= extensions_end && pos + 4 <= len)
     {
-        // read extension type (2 bytes big endian)
         uint16_t ext_type = ntohs(*(uint16_t *)(buffer + pos));
         pos += 2;
 
-        // read extension length (2 bytes big endian)
+        // --- read extension length and validate bounds ---
         uint16_t ext_len = ntohs(*(uint16_t *)(buffer + pos));
         pos += 2;
-        if (pos + ext_len > extensions_end || pos + ext_len > len) return -1;
 
-        // is this the SNI extension?
+        if (pos + ext_len > extensions_end || pos + ext_len > len)
+            return -1;
+
         if (ext_type == TLS_EXT_SNI)
         {
-            // SNI extension data structure:
-            //   server_name_list_length  2b
-            //   name_type                1b, 0x00 = host_name
-            //   name_length              2b
-            //   name                     variable, the actual hostname
+            // RFC 6066 section 3 — SNI structure:
+            //   server_name_list_length (2)
+            //   name_type               (1) — 0x00 = host_name
+            //   name_length             (2)
+            //   name                    (variable)
+            int sni_pos = pos;
+            int sni_end = pos + ext_len;
 
-            CHECK_BOUNDS(2);
-            pos += 2; // skip server_name_list_length
+            CHECK_BOUNDS(sni_pos, 2, sni_end);
+            sni_pos += 2; // skip list length
 
-            CHECK_BOUNDS(1);
-            uint8_t name_type = buffer[pos];
-            pos += 1;
+            CHECK_BOUNDS(sni_pos, 1, sni_end);
+            uint8_t name_type = buffer[sni_pos];
+            sni_pos += 1;
 
-            // only handle host_name type (TLS_SNI_HOST_NAME = 0x00)
-            if (name_type != TLS_SNI_HOST_NAME) return -1;
+            if (name_type != TLS_SNI_HOST_NAME)
+                return -1;
 
-            CHECK_BOUNDS(2);
-            uint16_t name_len = ntohs(*(uint16_t *)(buffer + pos));
-            pos += 2;
+            CHECK_BOUNDS(sni_pos, 2, sni_end);
+            uint16_t name_len = ntohs(*(uint16_t *)(buffer + sni_pos));
+            sni_pos += 2;
 
-            // bounds check before copying
-            CHECK_BOUNDS(name_len);
+            CHECK_BOUNDS(sni_pos, name_len, sni_end);
 
-            // copy hostname into output buffer
-            // don't copy more than hostname_len - 1 bytes
-            // null terminate after copying
             int copy_len = (name_len < hostname_len - 1) ? name_len : (hostname_len - 1);
-            memcpy(hostname, buffer + pos, copy_len);
+            memcpy(hostname, buffer + sni_pos, copy_len);
             hostname[copy_len] = '\0';
 
-            // lowercase it — same pattern as dns.c and proxy.c
             for (int i = 0; hostname[i]; i++)
-                hostname[i] = tolower(hostname[i]);
+                hostname[i] = tolower((unsigned char)hostname[i]);
 
-            return 0; // success
+            return 0;
         }
-        else
-            pos += ext_len; // not the SNI extension — skip past it
+
+        pos += ext_len;
     }
-    return -1; // SNI extension not found
+
+    return -1;
 }
 
-void* handle_tls_packet(void *arg)
+int extract_alpn(unsigned char *buffer, int len, tls_task_t *task)
 {
-    // cast arg — same pattern as every other thread function
+    // RFC 7301 section 3.1 — ALPN extension structure:
+    //   protocol_name_list_length (2)
+    //   protocol_name_length      (1)
+    //   protocol_name             (variable)
+    if (!buffer || len < 4) return -1;
+
+    int pos = 0;
+
+    CHECK_BOUNDS(pos, 2, len);
+    pos += 2; // skip list length
+
+    CHECK_BOUNDS(pos, 1, len);
+    uint8_t name_len = buffer[pos];
+    pos += 1;
+
+    CHECK_BOUNDS(pos, name_len, len);
+    if (name_len >= (int)sizeof(task->alpn))
+        name_len = sizeof(task->alpn) - 1;
+
+    memcpy(task->alpn, buffer + pos, name_len);
+    task->alpn[name_len] = '\0';
+
+    return 0;
+}
+
+int parse_client_hello(unsigned char *buffer, int len, tls_task_t *task)
+{
+    if (!is_tls_client_hello(buffer, len))
+        return 0;
+
+    task->client_hello_size = len;
+
+    int pos = TLS_RECORD_HEADER_SIZE + TLS_HANDSHAKE_HEADER_SIZE;
+
+    // extract legacy_version
+    CHECK_BOUNDS_ZERO(pos, 2, len);
+    task->tls_version = ntohs(*(uint16_t *)(buffer + pos));
+    pos += 2;
+
+    // skip random (32 bytes)
+    CHECK_BOUNDS_ZERO(pos, 32, len);
+    pos += 32;
+
+    // skip session_id
+    CHECK_BOUNDS_ZERO(pos, 1, len);
+    uint8_t session_id_len = buffer[pos];
+    CHECK_BOUNDS_ZERO(pos, 1 + session_id_len, len);
+    pos += 1 + session_id_len;
+
+    // skip cipher_suites
+    CHECK_BOUNDS_ZERO(pos, 2, len);
+    uint16_t cipher_suites_len = ntohs(*(uint16_t *)(buffer + pos));
+    CHECK_BOUNDS_ZERO(pos, 2 + cipher_suites_len, len);
+    pos += 2 + cipher_suites_len;
+
+    // skip compression methods
+    CHECK_BOUNDS_ZERO(pos, 1, len);
+    uint8_t compression_len = buffer[pos];
+    CHECK_BOUNDS_ZERO(pos, 1 + compression_len, len);
+    pos += 1 + compression_len;
+
+    // read extensions block — no extensions is still valid
+    if (pos + 2 > len)
+        goto done_extensions;
+
+    uint16_t extensions_len = ntohs(*(uint16_t *)(buffer + pos));
+    pos += 2;
+
+    if (pos + extensions_len > len)
+        goto done_extensions;
+
+    int extensions_end = pos + extensions_len;
+
+    // walk extensions, count them and extract ALPN
+    task->extension_count = 0;
+    while (pos + 4 <= extensions_end && pos + 4 <= len)
+    {
+        uint16_t ext_type = ntohs(*(uint16_t *)(buffer + pos));
+        pos += 2;
+        uint16_t ext_len = ntohs(*(uint16_t *)(buffer + pos));
+        pos += 2;
+
+        if (pos + ext_len > extensions_end || pos + ext_len > len)
+            break;
+
+        task->extension_count++;
+
+        if (ext_type == TLS_EXT_ALPN)
+            extract_alpn(buffer + pos, ext_len, task);
+
+        pos += ext_len;
+    }
+
+done_extensions:
+    // extract SNI — sets sni_present flag
+    task->sni_present = 0;
+    if (extract_sni(buffer, len, task->hostname, TLS_MAX_HOSTNAME_LEN) == 0)
+        task->sni_present = 1;
+
+    return 1;
+}
+
+tls_policy_verdict_t check_tls_policy(tls_task_t *task)
+{
+    // policy 1 — block missing SNI
+    // legitimate browsers always send SNI
+    // missing SNI = red flag for C2 or evasion tool — T1573
+    if (!task->sni_present)
+        return POLICY_BLOCK_NO_SNI;
+
+    // policy 2 — block deprecated TLS versions
+    // TLS 1.0 and 1.1 deprecated by RFC 8996
+    // block anything below TLS 1.2 (0x0303)
+    if (task->tls_version < TLS_MIN_VERSION)
+        return POLICY_BLOCK_OLD_TLS;
+
+    // policy 3 — alert on suspicious ALPN
+    // legitimate HTTPS uses "h2" or "http/1.1"
+    // anything else on port 443 may be C2 tunneling — T1071
+    if (task->alpn[0] != '\0' &&
+        strcmp(task->alpn, "h2")       != 0 &&
+        strcmp(task->alpn, "http/1.1") != 0 &&
+        strcmp(task->alpn, "http/1.0") != 0)
+        return POLICY_ALERT_ALPN;
+
+    // policy 4 — alert on anomalous extension count
+    // real browsers send 10-20 extensions
+    // very few or very many suggests a non-standard TLS client
+    if (task->extension_count > TLS_MAX_EXTENSION_COUNT)
+        return POLICY_ALERT_EXT_COUNT;
+
+    // policy 5 — alert on oversized ClientHello
+    if (task->client_hello_size > TLS_MAX_CLIENTHELLO_SIZE)
+        return POLICY_ALERT_LARGE_HELLO;
+
+    return POLICY_PASS;
+}
+
+// ============================================================
+// enforce_block
+// Layer 4 enforcement hook
+// TODO: implement TCP RST injection after Layer 4 is complete
+// ============================================================
+
+void enforce_block(tls_task_t *task)
+{
+    char src_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &task->src_addr.sin_addr, src_ip, sizeof(src_ip));
+    printf("[LAYER_6] [ENFORCE] would RST connection from %s host=%s\n",
+           src_ip, task->hostname[0] ? task->hostname : "unknown");
+}
+
+void *handle_tls_packet(void *arg)
+{
     tls_task_t *task = (tls_task_t *)arg;
 
-    // --- find TLS payload within raw packet ---
-    // extract IP header and TCP header to calculate offsets
+    // --- locate TLS payload within raw packet ---
     struct ip_hdr *ip_header = (struct ip_hdr *)task->buffer;
     size_t ip_hdr_len = (ip_header->version_ihl & 0x0F) * 4;
+    if (ip_hdr_len < 20 || (int)ip_hdr_len > task->packet_len)
+    {
+        free(task);
+        return NULL;
+    }
 
     struct tcp_hdr *tcp_header = (struct tcp_hdr *)(task->buffer + ip_hdr_len);
     size_t tcp_hdr_len = ((tcp_header->data_offset & 0xF0) >> 4) * 4;
+    if (tcp_hdr_len < 20 || (int)(ip_hdr_len + tcp_hdr_len) > task->packet_len)
+    {
+        free(task);
+        return NULL;
+    }
 
     unsigned char *tls_start = task->buffer + ip_hdr_len + tcp_hdr_len;
-    int tls_len = task->packet_len - ip_hdr_len - tcp_hdr_len;
+    int tls_len = task->packet_len - (int)ip_hdr_len - (int)tcp_hdr_len;
 
-    // --- check minimum size ---
     if (tls_len < TLS_RECORD_HEADER_SIZE + TLS_HANDSHAKE_HEADER_SIZE)
     {
         free(task);
         return NULL;
     }
 
-    // --- verify it's a ClientHello ---
-    if (!is_tls_client_hello(tls_start, tls_len))
+    // --- parse ClientHello and fill task metadata ---
+    if (!parse_client_hello(tls_start, tls_len, task))
     {
         free(task);
         return NULL;
     }
 
-    // --- extract SNI ---
-    if (extract_sni(tls_start, tls_len, task->hostname, TLS_MAX_HOSTNAME_LEN) < 0)
+    // --- run policy engine ---
+    task->verdict = check_tls_policy(task);
+
+    // --- enforce block verdicts ---
+    if (task->verdict == POLICY_BLOCK_NO_SNI ||
+        task->verdict == POLICY_BLOCK_OLD_TLS)
     {
-        log_decision("ALLOWED (no SNI)", task);
+        enforce_block(task);
+        log_policy_decision(task->verdict, task);
         free(task);
         return NULL;
     }
 
-    // --- check blocklist ---
-    // reuse is_blocked() from dns.c
-    if (is_blocked(task->hostname))
+    // --- check blocklist if SNI was present ---
+    if (task->sni_present && is_blocked(task->hostname))
     {
-        // log blocked
-        // NOTE: you can't send a response — this is passive
-        // log the alert and optionally feed to Layer 4 firewall
-        log_decision("BLOCKED", task);
-    }
-    else
-    {
-        log_decision("ALLOWED", task);
+        task->verdict = POLICY_BLOCK_NO_SNI;
+        enforce_block(task);
+        log_policy_decision(task->verdict, task);
+        free(task);
+        return NULL;
     }
 
-    // --- cleanup ---
+    // --- log alerts and allowed ---
+    log_policy_decision(task->verdict, task);
+
     free(task);
     return NULL;
 }
 
-void log_decision(const char *action, tls_task_t *task)
+void log_policy_decision(tls_policy_verdict_t verdict, tls_task_t *task)
 {
-    // same pattern as Layer 7 log_decision()
-    // get timestamp with time() → localtime() → strftime()
+    const char *action;
+    const char *attck;
+
+    switch (verdict)
+    {
+        case POLICY_BLOCK_NO_SNI:
+            action = "BLOCKED (no SNI)";
+            attck  = "T1573";
+            break;
+        case POLICY_BLOCK_OLD_TLS:
+            action = "BLOCKED (deprecated TLS)";
+            attck  = "T1573";
+            break;
+        case POLICY_ALERT_ALPN:
+            action = "ALERT (suspicious ALPN)";
+            attck  = "T1071";
+            break;
+        case POLICY_ALERT_EXT_COUNT:
+            action = "ALERT (anomalous extensions)";
+            attck  = "T1573";
+            break;
+        case POLICY_ALERT_LARGE_HELLO:
+            action = "ALERT (oversized ClientHello)";
+            attck  = "T1573";
+            break;
+        default:
+            action = "ALLOWED";
+            attck  = "T1573";
+            break;
+    }
 
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
+    struct tm tm_buf;
     char timestamp[32];
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", t);
+    char src_ip[INET_ADDRSTRLEN] = "unknown";
 
-    // get source IP string
-    // task->src_addr.sin_addr — same inet_ntoa() call as dns.c
-    char src_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &task->src_addr.sin_addr, src_ip, sizeof(src_ip));
+    if (localtime_r(&now, &tm_buf) != NULL)
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_buf);
 
-    // print structured log line matching LAYER_6.md format:
-    // [TIMESTAMP] [LAYER_6] [TLS] [ACTION] host=X src=X d3fend=D3-TLSIC attck=T1573
-    printf("[%s] [LAYER_6] [TLS] [%s] host=%s src=%s d3fend=D3-TLSIC attck=T1573\n", timestamp, action, task->hostname, src_ip);
+    if (task)
+        inet_ntop(AF_INET, &task->src_addr.sin_addr, src_ip, sizeof(src_ip));
+
+    printf("[%s] [LAYER_6] [TLS] [%s] host=%s src=%s "
+           "tls_ver=0x%04X ext_count=%d alpn=%s "
+           "d3fend=D3-TLSIC attck=%s\n",
+           timestamp, action,
+           (task && task->hostname[0]) ? task->hostname : "unknown",
+           src_ip,
+           task ? task->tls_version : 0,
+           task ? task->extension_count : 0,
+           (task && task->alpn[0]) ? task->alpn : "none",
+           attck);
 }
