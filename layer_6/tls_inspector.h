@@ -83,11 +83,12 @@
 // --- policy verdicts ---
 typedef enum {
     POLICY_PASS              = 0,
-    POLICY_BLOCK_NO_SNI      = 1,   // missing SNI — T1573
+    POLICY_ALERT_NO_SNI      = 1,   // missing SNI — alert-only until reassembly
     POLICY_BLOCK_OLD_TLS     = 2,   // TLS version < 1.2 — T1573
     POLICY_ALERT_ALPN        = 3,   // suspicious ALPN — T1071
     POLICY_ALERT_EXT_COUNT   = 4,   // anomalous extension count
     POLICY_ALERT_LARGE_HELLO = 5,   // oversized ClientHello
+    POLICY_BLOCK_BLOCKLIST   = 6,   // hostname matched local deny list
 } tls_policy_verdict_t;
 
 // --- task struct ---
@@ -104,6 +105,7 @@ typedef struct {
     char          alpn[64];             // ALPN value if present
     int           extension_count;      // total number of extensions
     int           client_hello_size;    // total ClientHello size in bytes
+    int           parse_complete;       // 1 only when full TLS record is present
     tls_policy_verdict_t verdict;       // result of policy check
 } tls_task_t;
 

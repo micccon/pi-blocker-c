@@ -232,7 +232,15 @@ int parse_client_hello(unsigned char *buffer, int len, tls_task_t *task)
     if (!is_tls_client_hello(buffer, len))
         return 0;
 
-    task->client_hello_size = len;
+    const struct tls_record_hdr *record_hdr = (const struct tls_record_hdr *)buffer;
+    int tls_record_len = ntohs(record_hdr->length);
+    int total_tls_record_size = TLS_RECORD_HEADER_SIZE + tls_record_len;
+    if (total_tls_record_size > len)
+        return 0; // incomplete TLS record in this packet
+
+    task->parse_complete = 1;
+    task->client_hello_size = total_tls_record_size;
+    len = total_tls_record_size;
 
     int pos = TLS_RECORD_HEADER_SIZE + TLS_HANDSHAKE_HEADER_SIZE;
 
@@ -306,11 +314,12 @@ done_extensions:
 
 tls_policy_verdict_t check_tls_policy(tls_task_t *task)
 {
-    // policy 1 — block missing SNI
-    // legitimate browsers always send SNI
-    // missing SNI = red flag for C2 or evasion tool — T1573
+    if (!task->parse_complete) return POLICY_PASS;
+
+    // policy 1 — alert on missing SNI
+    // NOTE: alert-only while parser is packet-based and does not do TCP reassembly
     if (!task->sni_present)
-        return POLICY_BLOCK_NO_SNI;
+        return POLICY_ALERT_NO_SNI;
 
     // policy 2 — block deprecated TLS versions
     // TLS 1.0 and 1.1 deprecated by RFC 8996
@@ -395,8 +404,7 @@ void *handle_tls_packet(void *arg)
     task->verdict = check_tls_policy(task);
 
     // --- enforce block verdicts ---
-    if (task->verdict == POLICY_BLOCK_NO_SNI ||
-        task->verdict == POLICY_BLOCK_OLD_TLS)
+    if (task->verdict == POLICY_BLOCK_OLD_TLS)
     {
         enforce_block(task);
         log_policy_decision(task->verdict, task);
@@ -407,7 +415,7 @@ void *handle_tls_packet(void *arg)
     // --- check blocklist if SNI was present ---
     if (task->sni_present && is_blocked(task->hostname))
     {
-        task->verdict = POLICY_BLOCK_NO_SNI;
+        task->verdict = POLICY_BLOCK_BLOCKLIST;
         enforce_block(task);
         log_policy_decision(task->verdict, task);
         free(task);
@@ -428,8 +436,8 @@ void log_policy_decision(tls_policy_verdict_t verdict, tls_task_t *task)
 
     switch (verdict)
     {
-        case POLICY_BLOCK_NO_SNI:
-            action = "BLOCKED (no SNI)";
+        case POLICY_ALERT_NO_SNI:
+            action = "ALERT (missing SNI)";
             attck  = "T1573";
             break;
         case POLICY_BLOCK_OLD_TLS:
@@ -446,6 +454,10 @@ void log_policy_decision(tls_policy_verdict_t verdict, tls_task_t *task)
             break;
         case POLICY_ALERT_LARGE_HELLO:
             action = "ALERT (oversized ClientHello)";
+            attck  = "T1573";
+            break;
+        case POLICY_BLOCK_BLOCKLIST:
+            action = "BLOCKED (blocklist)";
             attck  = "T1573";
             break;
         default:
