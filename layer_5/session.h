@@ -23,7 +23,7 @@
 #define SESSION_WINDOW_SECONDS  60
 
 // max SYNs from one IP within the window before flagging as flood
-#define SESSION_SYN_THRESHOLD   15
+#define SESSION_SYN_THRESHOLD   80
 
 // max total entries across all buckets
 #define SESSION_MAX_ENTRIES     4096
@@ -31,11 +31,17 @@
 // max size for buffer
 #define SESSION_BUFFER_SIZE     4096
 
+// hash multipliers for tuple mixing (Knuth golden ratio)
+#define SESSION_HASH_DST_MULTIPLIER   2654435761u
+#define SESSION_HASH_PORT_MULTIPLIER  2246822519u
+
 // --- session entry ---
 // one tracked IP in the hash table
 // uses chaining for collision resolution
 typedef struct session_entry {
     uint32_t src_ip;              // source IP address (network byte order)
+    uint32_t dst_ip;              // destination IP address (network byte order)
+    uint16_t dst_port;            // destination TCP port (network byte order)
     int syn_count;               // how many SYNs seen in current window
     time_t window_start;         // when the current window started
     bool blocked;                // whether this IP is currently blocked
@@ -70,24 +76,27 @@ void start_session_tracker();
 // call once at startup before any lookups or inserts
 void session_table_init(session_table_t *table);
 
-// looks up an entry by source IP
+// looks up an entry by source/destination tuple
 // returns pointer to entry if found, NULL if not present
 // caller must hold table->lock
-session_entry_t* session_lookup(session_table_t *table, uint32_t src_ip);
+session_entry_t* session_lookup(session_table_t *table, uint32_t src_ip,
+                                uint32_t dst_ip, uint16_t dst_port);
 
-// inserts a new entry for src_ip
+// inserts a new entry for src/dst/port tuple
 // returns pointer to new entry, NULL if table is full or alloc fails
 // caller must hold table->lock
-session_entry_t* session_insert(session_table_t *table, uint32_t src_ip);
+session_entry_t* session_insert(session_table_t *table, uint32_t src_ip,
+                                uint32_t dst_ip, uint16_t dst_port);
 
 // main rate limit check — call this on every SYN packet
-// looks up or inserts src_ip, increments syn_count
+// looks up or inserts src/dst/port tuple, increments syn_count
 // resets counter if window has expired
 // returns negative syn_count on first block transition
 // returns positive syn_count when allowed or already blocked
 // returns 0 if insert failed (table full / alloc failure)
 // handles its own locking internally
-int check_syn_flood(session_table_t *table, uint32_t src_ip);
+int check_syn_flood(session_table_t *table, uint32_t src_ip,
+                    uint32_t dst_ip, uint16_t dst_port);
 
 // frees all entries and destroys mutex
 // call on shutdown

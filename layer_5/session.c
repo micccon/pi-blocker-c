@@ -6,11 +6,17 @@
 static session_table_t g_session_table;
 
 // --- internal hash function ---
-// hashes source IP to a bucket index
+// hashes source/destination tuple to a bucket index
 // keep this static — internal detail only
-static uint32_t hash_ip(uint32_t ip)
+static uint32_t hash_session_key(uint32_t src_ip, uint32_t dst_ip, uint16_t dst_port)
 {
-    return ip % SESSION_TABLE_SIZE;
+    uint32_t src = ntohl(src_ip);
+    uint32_t dst = ntohl(dst_ip);
+    uint32_t port = (uint32_t)ntohs(dst_port);
+    uint32_t mixed = src ^
+                     (dst * SESSION_HASH_DST_MULTIPLIER) ^
+                     (port * SESSION_HASH_PORT_MULTIPLIER);
+    return mixed % SESSION_TABLE_SIZE;
 }
 
 void session_table_init(session_table_t *table)
@@ -30,16 +36,19 @@ void session_table_init(session_table_t *table)
     }
 }
 
-session_entry_t *session_lookup(session_table_t *table, uint32_t src_ip)
+session_entry_t *session_lookup(session_table_t *table, uint32_t src_ip,
+                                uint32_t dst_ip, uint16_t dst_port)
 {
-    // --- hash the IP to get bucket index ---
-    int index = hash_ip(src_ip);
+    // --- hash tuple to get bucket index ---
+    int index = hash_session_key(src_ip, dst_ip, dst_port);
 
     // --- walk the chain at that bucket ---
     session_entry_t *entry = table->buckets[index];
     while (entry != NULL)
     {
-        if (entry->src_ip == src_ip)
+        if (entry->src_ip == src_ip &&
+            entry->dst_ip == dst_ip &&
+            entry->dst_port == dst_port)
             return entry;
 
         entry = entry->next;
@@ -68,7 +77,8 @@ static void session_prune_expired_locked(session_table_t *table, time_t now)
     }
 }
 
-session_entry_t *session_insert(session_table_t *table, uint32_t src_ip)
+session_entry_t *session_insert(session_table_t *table, uint32_t src_ip,
+                                uint32_t dst_ip, uint16_t dst_port)
 {
     // --- check if table is full ---
     if (table->total_entries >= SESSION_MAX_ENTRIES)
@@ -86,13 +96,15 @@ session_entry_t *session_insert(session_table_t *table, uint32_t src_ip)
 
     // --- fill in entry fields ---
     entry->src_ip       = src_ip;
+    entry->dst_ip       = dst_ip;
+    entry->dst_port     = dst_port;
     entry->syn_count    = 0;
     entry->window_start = time(NULL);
     entry->blocked      = false;
     entry->next         = NULL;
 
     // --- insert at HEAD of bucket chain ---
-    int index = hash_ip(src_ip);
+    int index = hash_session_key(src_ip, dst_ip, dst_port);
     entry->next = table->buckets[index];
     table->buckets[index] = entry;
 
@@ -107,17 +119,18 @@ session_entry_t *session_insert(session_table_t *table, uint32_t src_ip)
 //    entry->syn_count  → allowed (always >= 1 due to syn_count++)
 //    >SESSION_SYN_THRESHOLD (positive) → already blocked, no new enforce needed
 //    0                 → insert failed, treat as allowed
-int check_syn_flood(session_table_t *table, uint32_t src_ip)
+int check_syn_flood(session_table_t *table, uint32_t src_ip,
+                    uint32_t dst_ip, uint16_t dst_port)
 {
     // --- acquire lock ---
     pthread_mutex_lock(&table->lock);
 
     // --- look up entry ---
-    session_entry_t *entry = session_lookup(table, src_ip);
+    session_entry_t *entry = session_lookup(table, src_ip, dst_ip, dst_port);
 
     // --- if not found, insert new entry ---
     if (!entry)
-        entry = session_insert(table, src_ip);
+        entry = session_insert(table, src_ip, dst_ip, dst_port);
 
     // insert failed — table full or alloc failure
     // return 0 so caller treats as allowed, avoids false positives
@@ -276,15 +289,19 @@ void *handle_session_packet(void *arg)
 {
     session_task_t *task = (session_task_t *)arg;
 
-    // --- extract src_ip from IP header ---
+    // --- extract tuple from packet headers ---
     struct ip_hdr *ip_header = (struct ip_hdr *)task->buffer;
     uint32_t src_ip = ip_header->src_addr;  // keep network byte order throughout
+    uint32_t dst_ip = ip_header->dst_addr;
+    size_t ip_hdr_len = (ip_header->version_ihl & 0x0F) * 4;
+    struct tcp_hdr *tcp_header = (struct tcp_hdr *)(task->buffer + ip_hdr_len);
+    uint16_t dst_port = tcp_header->dst_port;
 
     // --- call check_syn_flood ---
     //   negative - flood, abs value = syn_count
     //   positive - allowed, value = syn_count
     //   zero     insert failed, treat as allowed
-    int count = check_syn_flood(&g_session_table, src_ip);
+    int count = check_syn_flood(&g_session_table, src_ip, dst_ip, dst_port);
 
     if (count < 0)
     {
