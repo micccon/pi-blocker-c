@@ -43,8 +43,9 @@ typedef struct {
     struct sockaddr_in client_addr;         // Who sent the request (for logging)
     char method[MAX_METHOD_LENGTH];         // HTTP method (e.g., "GET", "POST")
     char hostname[MAX_HOSTNAME_LENGTH];     // Hostname from the HTTP request
-    char path[MAX_PATH_LENGTH];             // Path from the HTTP request
-} __attribute__((packed)) http_task_t;
+    char path[MAX_PATH_LENGTH];  
+    int  port;                   // Port number for CONNECT requests (default 443)
+} http_task_t;
 
 // --- function signatures ---
 // implement these in proxy.c
@@ -63,11 +64,17 @@ int   parse_http_request(char *buffer, http_task_t *task);
 // sends a 403 Forbidden HTTP response to the client
 void  send_403_response(int client_fd);
 
+// send a 502 Bad Gateway response (used when CONNECT tunnel setup fails)
+void  send_502_response(int client_fd);
+
 // resolves host, connects to real server, relays request and response
-void  forward_http_request(http_task_t *task, char *buffer, int buffer_len);
+void forward_request(http_task_t *task, char *buffer, int buffer_len);
 
 // thread entry point — orchestrates all the above
 void* handle_http_request(void *arg);
+
+// handles HTTP CONNECT tunneling for HTTPS — RFC 7231 section 4.3.6
+void handle_connect_tunnel(http_task_t *task);
 
 // writes a structured log line to stdout (and optionally a file)
 void  log_decision(const char *action, http_task_t *task);

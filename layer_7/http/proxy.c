@@ -4,6 +4,7 @@
 #include "../dns/dns.h"  // for blocklist functions and is_blocked()
 #include <netdb.h>       // for getaddrinfo and struct addrinfo
 #include <ctype.h>
+#include <strings.h>
 
 void start_proxy_server()
 {
@@ -158,14 +159,26 @@ int parse_http_request(char *buffer, http_task_t *task)
     }
 
     // --- find the Host header ---
-    char *host_start;
-    if ((host_start = strstr(buffer, "Host: ")) == NULL)
+    char *host_start = NULL;
+    char *line = buffer;
+    while (line && *line)
+    {
+        char *next = strstr(line, "\r\n");
+        if (strncasecmp(line, "Host:", 5) == 0)
+        {
+            host_start = line + 5;
+            while (*host_start == ' ' || *host_start == '\t')
+                host_start++;
+            break;
+        }
+        if (!next) break;
+        line = next + 2;
+    }
+    if (host_start == NULL)
     {
         fprintf(stderr, "Host header not found in HTTP request\n");
         return -1;
     }
-
-    host_start += 6; // move past "Host: "
 
     // --- extract hostname ---
     char *host_end = strstr(host_start, "\r\n"); // end of Host header line
@@ -187,8 +200,21 @@ int parse_http_request(char *buffer, http_task_t *task)
     task->hostname[host_len] = '\0'; // null terminate
     
     // --- strip port from host ---
-    if (strchr(task->hostname, ':') != NULL)
-        *strchr(task->hostname, ':') = '\0'; // truncate at ':'
+    char *colon = strchr(task->hostname, ':');
+    if (colon != NULL)
+    {
+        char *endptr;
+        long port = strtol(colon + 1, &endptr, 10);
+        
+        if (*endptr == '\0' && port > 0 && port <= 65535)
+            task->port = (int)port;
+        else
+            task->port = (strcasecmp(task->method, "CONNECT") == 0) ? 443 : 80;  // malformed port — use method default
+        
+        *colon = '\0';  // strip port from hostname
+    }
+    else
+        task->port = (strcasecmp(task->method, "CONNECT") == 0) ? 443 : 80;
 
     // --- lowercase the host ---
     for (int i = 0; task->hostname[i]; i++)
@@ -220,17 +246,30 @@ void send_403_response(int client_fd)
     }
 }
 
-void forward_http_request(http_task_t *task, char *buffer, int buffer_len)
+void send_502_response(int client_fd)
 {
+    const char *body = "<html><body><h1>Bad Gateway</h1></body></html>";
+    int body_len = strlen(body);
 
-    // you cannot connect() using a hostname string
-    // you need to resolve it to an IP first
-    // getaddrinfo() does this — man 3 getaddrinfo
-    // read the ENTIRE man page including the example at the bottom
-    // it is the best documentation for this function
+    char response[HTTP_BUFFER_SIZE];
+    int len = snprintf(response, sizeof(response),
+        "HTTP/1.1 502 Bad Gateway\r\n"
+        "Content-Type: text/html\r\n"
+        "Content-Length: %d\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "%s", body_len, body);
 
+    if (send(client_fd, response, len, 0) < 0)
+    {
+        perror("Failed to send 502 response");
+        return;
+    }
+}
+
+void forward_request(http_task_t *task, char *buffer, int buffer_len)
+{
     // --- set up hints struct ---
-    // tells getaddrinfo what kind of socket you want
     struct addrinfo hints;
     struct addrinfo *results;
 
@@ -238,16 +277,17 @@ void forward_http_request(http_task_t *task, char *buffer, int buffer_len)
     hints.ai_family   = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
-    hints.ai_flags    = 0;
-    hints.ai_canonname = NULL;
-    hints.ai_addr = NULL;
-    hints.ai_next = NULL;
 
-    // --- resolve hostname ---
-    int status = getaddrinfo(task->hostname, "80", &hints, &results);
+    // --- resolve hostname using task->port ---
+    // use task->port instead of hardcoded "80"
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%d", task->port);
+
+    int status = getaddrinfo(task->hostname, port_str, &hints, &results);
     if (status != 0)
     {
-        fprintf(stderr, "Failed to resolve hostname %s: %s\n", task->hostname, gai_strerror(status));
+        fprintf(stderr, "Failed to resolve hostname %s: %s\n",
+                task->hostname, gai_strerror(status));
         return;
     }
 
@@ -255,7 +295,8 @@ void forward_http_request(http_task_t *task, char *buffer, int buffer_len)
     int upstream_fd = -1;
     for (struct addrinfo *candidate = results; candidate != NULL; candidate = candidate->ai_next)
     {
-        upstream_fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+        upstream_fd = socket(candidate->ai_family, candidate->ai_socktype,
+                             candidate->ai_protocol);
         if (upstream_fd < 0)
             continue;
 
@@ -266,17 +307,17 @@ void forward_http_request(http_task_t *task, char *buffer, int buffer_len)
         upstream_fd = -1;
     }
 
-    // --- free addrinfo ---
     freeaddrinfo(results);
+
     if (upstream_fd < 0)
     {
         perror("Failed to connect to upstream server");
         return;
     }
-    
+
     // --- forward the original request ---
-    ssize_t sent_bytes = send(upstream_fd, buffer, buffer_len, 0);
-    if (sent_bytes < 0)
+    ssize_t sent = send(upstream_fd, buffer, buffer_len, 0);
+    if (sent < 0)
     {
         perror("Failed to send HTTP request to upstream server");
         close(upstream_fd);
@@ -288,29 +329,29 @@ void forward_http_request(http_task_t *task, char *buffer, int buffer_len)
     while (!client_send_failed)
     {
         char relay_buf[HTTP_BUFFER_SIZE];
-        ssize_t recv_bytes = recv(upstream_fd, relay_buf, sizeof(relay_buf), 0);
-        if (recv_bytes < 0)
+        ssize_t bytes = recv(upstream_fd, relay_buf, sizeof(relay_buf), 0);
+
+        if (bytes < 0)
         {
             perror("Error receiving response from upstream server");
             break;
         }
-        else if (recv_bytes == 0)
-        {
-            // upstream server closed connection
-            break;
-        }
+        else if (bytes == 0)
+            break; // upstream closed connection
 
+        // handle partial sends
         ssize_t total_sent = 0;
-        while (total_sent < recv_bytes)
+        while (total_sent < bytes)
         {
-            ssize_t sent = send(task->client_socket, relay_buf + total_sent, recv_bytes - total_sent, 0);
-            if (sent < 0)
+            ssize_t s = send(task->client_socket, relay_buf + total_sent,
+                             bytes - total_sent, 0);
+            if (s < 0)
             {
                 perror("Error sending response to client");
                 client_send_failed = true;
                 break;
             }
-            total_sent += sent;
+            total_sent += s;
         }
     }
 
@@ -352,16 +393,23 @@ void* handle_http_request(void *arg)
         return NULL;
     }
 
-    // --- check blocklist and either block or forward ---
+    // --- check blocklist and route request ---
     if (is_blocked(task->hostname))
     {
         log_decision("BLOCKED", task);
         send_403_response(task->client_socket);
     }
+    else if (strcasecmp(task->method, "CONNECT") == 0)
+    {
+        // HTTPS tunnel — RFC 7231 section 4.3.6
+        log_decision("TUNNEL", task);
+        handle_connect_tunnel(task);
+    }
     else
     {
+        // plain HTTP
         log_decision("FORWARDED", task);
-        forward_http_request(task, buffer, request_len);
+        forward_request(task, buffer, request_len);
     }
 
     // --- final cleanup ---
@@ -370,6 +418,148 @@ void* handle_http_request(void *arg)
     free(task);
 
     return NULL;
+}
+
+void handle_connect_tunnel(http_task_t *task)
+{
+    // --- resolve hostname ---
+    struct addrinfo hints;
+    struct addrinfo *results;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    // --- parse port from task->hostname if present ---
+    char port_str[8];
+    int ret = snprintf(port_str, sizeof(port_str), "%d", task->port);
+    if (ret < 0 || (size_t)ret >= sizeof(port_str))
+    {
+        fprintf(stderr, "Error formatting port string\n");
+        send_502_response(task->client_socket);
+        return;
+    }
+
+    // --- resolve hostname using task->port ---
+    int status = getaddrinfo(task->hostname, port_str, &hints, &results);
+    if (status != 0)    {
+        fprintf(stderr, "Failed to resolve hostname %s: %s\n",
+                task->hostname, gai_strerror(status));
+        send_502_response(task->client_socket);
+        return;
+    }
+
+    // --- connect to real server ---
+    int server_fd = -1;
+    for (struct addrinfo *rp = results; rp != NULL; rp = rp->ai_next)
+    {
+        server_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (server_fd < 0)
+            continue;
+
+        if (connect(server_fd, rp->ai_addr, rp->ai_addrlen) == 0)
+            break; // success
+
+        close(server_fd);
+        server_fd = -1;
+    }
+    freeaddrinfo(results);
+
+    // --- if connect failed → send 502 ---
+    if (server_fd < 0)
+    {
+        perror("Failed to connect to upstream server for CONNECT tunnel");
+        send_502_response(task->client_socket);
+        return;
+    }
+
+    // --- send 200 Connection Established ---
+    int send_status = send(task->client_socket, "HTTP/1.1 200 Connection Established\r\n\r\n", 39, 0);
+    if (send_status < 0)
+    {
+        perror("Failed to send 200 Connection Established response");
+        close(server_fd);
+        return;
+    }
+
+    // --- relay bytes both directions ---
+    char relay_buf[HTTP_BUFFER_SIZE];
+    struct pollfd fds[2];
+    fds[0].fd = task->client_socket;
+    fds[0].events = POLLIN;
+    fds[1].fd = server_fd;
+    fds[1].events = POLLIN;
+
+    while (1)
+    {
+        int client_activity = poll(fds, 2, 30000);
+
+        if (client_activity < 0)
+        {
+            perror("poll error in CONNECT tunnel");
+            break;
+        }
+        if (client_activity == 0)
+            break;
+
+        // --- browser → server ---
+        if (fds[0].revents & POLLIN)
+        {
+            // recv from client
+            ssize_t bytes = recv(task->client_socket, relay_buf, sizeof(relay_buf), 0);
+            if (bytes < 0)
+            {
+                perror("Error receiving data from client in CONNECT tunnel");
+                break;
+            }
+            else if (bytes == 0)
+                break;
+
+            // send to server
+            int total_sent = 0;
+            while (total_sent < bytes)
+            {
+                int send_bytes = send(server_fd, relay_buf + total_sent, bytes - total_sent, 0);
+                if (send_bytes <= 0)
+                {
+                    perror("Error sending data to server in CONNECT tunnel");
+                    goto tunnel_done;
+                }
+                total_sent += send_bytes;
+            }
+        }
+
+        // --- server → browser ---
+        if (fds[1].revents & POLLIN)
+        {
+            // recv from server
+            ssize_t bytes = recv(server_fd, relay_buf, sizeof(relay_buf), 0);
+            if (bytes < 0)
+            {
+                perror("Error receiving data from server in CONNECT tunnel");
+                break;
+            }
+            else if (bytes == 0)
+                break;
+
+            // send to client
+            int total_sent = 0;
+            while (total_sent < bytes)
+            {
+                int send_bytes = send(task->client_socket, relay_buf + total_sent, bytes - total_sent, 0);
+                if (send_bytes <= 0)
+                {
+                    perror("Error sending data to client in CONNECT tunnel");
+                    goto tunnel_done;
+                }
+                total_sent += send_bytes;
+            }
+        }
+    }
+
+tunnel_done:
+    // --- cleanup ---
+    close(server_fd);
 }
 
 void log_decision(const char *action, http_task_t *task)
@@ -389,7 +579,14 @@ void log_decision(const char *action, http_task_t *task)
         strncpy(client_ip, "unknown-ip", sizeof(client_ip));
 
     // --- print log line ---
-    printf("[%s] [LAYER_7] [HTTP] [%s] host=%s path=%s client=%s d3fend=D3-HTTPA attck=T1071.001\n", 
-            timestamp, action, task->hostname, 
-            task->path, client_ip);
+    if (strcasecmp(task->method, "CONNECT") == 0)
+    {
+        printf("[%s] [LAYER_7] [HTTP] [%s] host=%s port=%d client=%s d3fend=D3-HTTPA attck=T1071.001\n",
+                timestamp, action, task->hostname, task->port, client_ip);
+    }
+    else
+    {
+        printf("[%s] [LAYER_7] [HTTP] [%s] host=%s path=%s client=%s d3fend=D3-HTTPA attck=T1071.001\n",
+                timestamp, action, task->hostname, task->path, client_ip);
+    }
 }
