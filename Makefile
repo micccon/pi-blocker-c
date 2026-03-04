@@ -1,6 +1,6 @@
 SUBDIRS := layer_1 layer_2 layer_3 layer_4 layer_5 layer_6 layer_7
 
-all:
+all: chmod-scripts
 	@for d in $(SUBDIRS); do \
 		if [ -f "$$d/Makefile" ] && grep -Eq "^[[:space:]]*all:" "$$d/Makefile"; then \
 			echo "==> $$d: make all"; \
@@ -8,7 +8,11 @@ all:
 		else \
 			echo "==> $$d: skipping (no 'all' target)"; \
 		fi; \
-	done
+		done
+
+chmod-scripts:
+	@echo "==> setting executable permissions on start_layer*.sh scripts"
+	@find . -type f -name 'start_layer*.sh' -exec chmod +x {} +
 
 clean:
 	@for d in $(SUBDIRS); do \
@@ -35,4 +39,4 @@ rebuild: clean all
 list:
 	@printf "%s\n" $(SUBDIRS)
 
-.PHONY: all clean run rebuild list
+.PHONY: all clean run rebuild list chmod-scripts
