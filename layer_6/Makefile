@@ -5,6 +5,8 @@ SRC    = main.c tls_inspector.c ../layer_7/dns/dns.c
 TARGET = tls-inspector
 
 all: $(TARGET)
+
+$(TARGET): $(SRC)
 	$(CC) $(CFLAGS) -o $(TARGET) $(SRC)
 
 clean:
