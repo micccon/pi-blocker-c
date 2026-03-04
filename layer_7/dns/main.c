@@ -9,7 +9,7 @@ int main(int argc, char *argv[])
 
 	// Load blocklist
 	printf("Loading blocklist...\n");
-	load_blocklist("hostnames/blocklist.txt");
+	load_blocklist("../../hostnames/blocklist.txt");
 
 	printf("Starting DNS Proxy Server...\n");
 

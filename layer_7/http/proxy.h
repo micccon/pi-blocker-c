@@ -44,7 +44,7 @@ typedef struct {
     char method[MAX_METHOD_LENGTH];         // HTTP method (e.g., "GET", "POST")
     char hostname[MAX_HOSTNAME_LENGTH];     // Hostname from the HTTP request
     char path[MAX_PATH_LENGTH];             // Path from the HTTP request
-} http_task_t;
+} __attribute__((packed)) http_task_t;
 
 // --- function signatures ---
 // implement these in proxy.c

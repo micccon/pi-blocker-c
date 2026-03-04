@@ -12,4 +12,7 @@ $(TARGET): $(SRC)
 clean:
 	rm -f $(TARGET)
 
-.PHONY: all clean
+run: all
+	./$(TARGET)
+
+.PHONY: all clean run

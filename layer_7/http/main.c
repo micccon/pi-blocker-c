@@ -3,10 +3,10 @@
 #include "proxy.h"
 #include "../dns/dns.h"  // for blocklist functions and is_blocked()
 
-int main(int argc, char *argv[])
+int main(void)
 {
     // --- load the blocklist ---
-    load_blocklist("../dns/hostnames/blocklist.txt");
+    load_blocklist("../../hostnames/blocklist.txt");
 
     printf("HTTP Proxy Server is starting...\n");
     printf("Listening on port 8080\n");

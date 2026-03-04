@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <poll.h>
 #include <pthread.h>
+#include "../../common/net_hdrs.h"
 
 // Masks for the Flags field
 #define DNS_FLAG_QR     0x8000  // 1000 0000 0000 0000 (The very first bit)
@@ -37,22 +38,6 @@ extern char **g_blocklist;
 extern size_t g_blocklist_size;
 
 // -------------------------- DNS STRUCTS -----------------------------
-
-/* * DNS Header Structure (RFC 1035)
- * Total Size: 12 Bytes
- * All fields are 16-bit integers (uint16_t)
- * WARNING: Data comes in Big-Endian (Network Byte Order).
- * You must use ntohs() to read the numbers correctly.
- */
-struct dns_hdr {
-    uint16_t id;          // Transaction ID: Matches the query to the response.
-    uint16_t flags;       // Flags & Codes: Contains QR, Opcode, AA, TC, RD, RA, Z, RCODE.
-                          // (We will use bitwise math to read the specific bits later)
-    uint16_t qdcount;     // Question Count: How many questions are we asking? (Usually 1)
-    uint16_t ancount;     // Answer Count: How many answers is the server sending back?
-    uint16_t nscount;     // Authority Count: How many "Authority" servers (NS records) are listed?
-    uint16_t arcount;     // Additional Count: How many "Extra" records (like glue records) are included?
-};
 
 /**
  * Data structure used to pass context to worker threads.
