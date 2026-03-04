@@ -32,13 +32,13 @@ trap cleanup INT TERM EXIT
 
 (
     cd "$ROOT_DIR/dns"
-    ./dns-filter
+    stdbuf -oL -eL ./dns-filter
 ) &
 dns_pid=$!
 
 (
     cd "$ROOT_DIR/http"
-    ./http-proxy
+    stdbuf -oL -eL ./http-proxy
 ) &
 http_pid=$!
 

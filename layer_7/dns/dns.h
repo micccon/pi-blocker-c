@@ -124,4 +124,11 @@ bool is_blocked(char *host);
  */
 void free_blocklist();
 
+/**
+ * Structured DNS decision logger.
+ * Format:
+ * [TIMESTAMP] [LAYER_7] [DNS] [ACTION] domain=X client=X d3fend=D3-DNSDL attck=T1071.004
+ */
+void log_dns_decision(const char *action, const char *domain, const struct sockaddr_in *client_addr);
+
 #endif

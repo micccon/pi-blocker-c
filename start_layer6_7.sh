@@ -40,13 +40,13 @@ trap cleanup INT TERM EXIT
 
 (
     cd "$LAYER6_DIR"
-    ./start_layer6.sh
+    stdbuf -oL -eL ./start_layer6.sh
 ) &
 layer6_pid=$!
 
 (
     cd "$LAYER7_DIR"
-    ./start_layer7.sh
+    stdbuf -oL -eL ./start_layer7.sh
 ) &
 layer7_pid=$!
 
@@ -55,4 +55,3 @@ echo "  Layer 6 PID=$layer6_pid"
 echo "  Layer 7 PID=$layer7_pid"
 
 wait -n "$layer6_pid" "$layer7_pid"
-

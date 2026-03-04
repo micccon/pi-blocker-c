@@ -16,5 +16,4 @@ if [[ ! -x "$ROOT_DIR/tls-inspector" ]]; then
 fi
 
 cd "$ROOT_DIR"
-exec ./tls-inspector "$@"
-
+exec stdbuf -oL -eL ./tls-inspector "$@"

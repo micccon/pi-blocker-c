@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <time.h>
 
 #include "dns.h"
 
@@ -119,6 +120,35 @@ bool is_blocked(char *host)
 	return false;
 }
 
+void log_dns_decision(const char *action, const char *domain, const struct sockaddr_in *client_addr)
+{
+	char timestamp[32];
+	time_t now = time(NULL);
+	struct tm tm_buf;
+	if (localtime_r(&now, &tm_buf) != NULL)
+		strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_buf);
+	else
+		strncpy(timestamp, "unknown-time", sizeof(timestamp));
+
+	char client_ip[INET_ADDRSTRLEN];
+	if (client_addr != NULL &&
+		inet_ntop(AF_INET, &client_addr->sin_addr, client_ip, sizeof(client_ip)) != NULL)
+	{
+		/* populated by inet_ntop */
+	}
+	else
+	{
+		strncpy(client_ip, "unknown-ip", sizeof(client_ip));
+		client_ip[sizeof(client_ip) - 1] = '\0';
+	}
+
+	printf("[%s] [LAYER_7] [DNS] [%s] domain=%s client=%s d3fend=D3-DNSDL attck=T1071.004\n",
+		timestamp,
+		(action != NULL) ? action : "UNKNOWN",
+		(domain != NULL) ? domain : "unknown-domain",
+		client_ip);
+}
+
 // ---------- DNS PARSER ----------
 
 // Reads the name of a domain
@@ -225,8 +255,7 @@ void* handle_dns_request(void *arg)
 	// Refuse packet so client doesn't time out
 	if ( is_blocked(domain_name) )
 	{
-		printf("[BLOCKED] %s requested by %s\n", domain_name,
-					inet_ntoa(task->client_addr.sin_addr));
+		log_dns_decision("BLOCKED", domain_name, &task->client_addr);
 
 		// Create a "Refused" response
 		struct dns_hdr *header = (struct dns_hdr *)task->buffer;
@@ -238,8 +267,7 @@ void* handle_dns_request(void *arg)
 	}
 	else // Is a normal packet
     {
-        printf("[FORWARD] %s requested by %s\n", domain_name,
-                    inet_ntoa(task->client_addr.sin_addr));
+        log_dns_decision("FORWARD", domain_name, &task->client_addr);
         
         // Create thread-local upstream socket to avoid race conditions
         int upstream_socket;
@@ -268,7 +296,7 @@ void* handle_dns_request(void *arg)
                 (struct sockaddr *)&task->client_addr, sizeof(task->client_addr));
         }
         else
-            printf("  [TIMEOUT] Upstream did not reply for %s\n", domain_name);
+            log_dns_decision("TIMEOUT", domain_name, &task->client_addr);
 
         // Close local socket
         close(upstream_socket);
