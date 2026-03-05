@@ -60,6 +60,13 @@ if [[ ${#selected_scripts[@]} -eq 0 ]]; then
     exit 0
 fi
 
+# --- cleanup stale layer processes ---
+# prevents old runs from continuing to print logs (e.g., lingering Layer 3)
+stale_regex='ip-filter|port-filter|arp-monitor|session-inspector|tls-inspector|dns-filter|http-proxy'
+pkill -TERM -f "$stale_regex" 2>/dev/null || true
+sleep 0.2
+pkill -KILL -f "$stale_regex" 2>/dev/null || true
+
 pids=()
 
 cleanup() {
