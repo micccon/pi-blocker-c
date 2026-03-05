@@ -3,6 +3,29 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+extract_layer_number() {
+    local base="$1"
+    local layer="${base#start_layer}"
+    layer="${layer%.sh}"
+    layer="${layer#_}"
+    printf '%s\n' "$layer"
+}
+
+wants_layer() {
+    local layer="$1"
+
+    if [[ ${REQUEST_ALL:-0} -eq 1 ]]; then
+        return 0
+    fi
+
+    for req in "${REQUESTED_LAYERS[@]}"; do
+        if [[ "$req" == "$layer" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Discover scripts like start_layer1.sh, start_layer_5.sh, start_layer7.sh.
 # This avoids updating this script as new layers are added.
 mapfile -t scripts < <(
@@ -23,33 +46,45 @@ if [[ ${#layer_scripts[@]} -eq 0 ]]; then
     exit 0
 fi
 
-# Map: layer number -> script path
-declare -A script_for_layer
-for rel_script in "${layer_scripts[@]}"; do
-    base="$(basename "$rel_script")"       # start_layer5.sh or start_layer_5.sh
-    layer="${base#start_layer}"            # 5.sh or _5.sh
-    layer="${layer%.sh}"                   # 5 or _5
-    layer="${layer#_}"                     # 5
-    script_for_layer["$layer"]="$rel_script"
-done
-
 # Build run list:
 # - no args: run all discovered layers
 # - args: run only requested layers
 selected_scripts=()
 if [[ $# -eq 0 ]]; then
-    while IFS= read -r layer; do
-        selected_scripts+=("${script_for_layer[$layer]}")
-    done < <(printf '%s\n' "${!script_for_layer[@]}" | sort -n)
+    REQUEST_ALL=1
+    REQUESTED_LAYERS=()
 else
+    REQUEST_ALL=0
+    REQUESTED_LAYERS=()
     for req in "$@"; do
         if [[ ! "$req" =~ ^[0-9]+$ ]]; then
             echo "Invalid layer '$req' (expected numeric layer like 1 2 4 7)"
             exit 1
         fi
-        if [[ -n "${script_for_layer[$req]:-}" ]]; then
-            selected_scripts+=("${script_for_layer[$req]}")
-        else
+        REQUESTED_LAYERS+=("$req")
+    done
+fi
+
+for rel_script in "${layer_scripts[@]}"; do
+    base="$(basename "$rel_script")"
+    layer="$(extract_layer_number "$base")"
+    if wants_layer "$layer"; then
+        selected_scripts+=("$rel_script")
+    fi
+done
+
+if [[ ${REQUEST_ALL:-0} -eq 0 ]]; then
+    for req in "${REQUESTED_LAYERS[@]}"; do
+        found=0
+        for rel_script in "${selected_scripts[@]}"; do
+            base="$(basename "$rel_script")"
+            layer="$(extract_layer_number "$base")"
+            if [[ "$layer" == "$req" ]]; then
+                found=1
+                break
+            fi
+        done
+        if [[ $found -eq 0 ]]; then
             echo "Skipping layer $req (no start script found)"
         fi
     done
