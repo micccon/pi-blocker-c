@@ -1,4 +1,20 @@
 #include "ip_filter.h"
+#include <signal.h>
+
+// --- runtime stop state ---
+// set by signal handler path in main.c
+static volatile sig_atomic_t g_ip_filter_stop = 0;
+static int g_ip_filter_fd = -1;
+
+void request_ip_filter_stop(void)
+{
+    // --- request main loop shutdown ---
+    g_ip_filter_stop = 1;
+
+    // --- close socket to unblock recvfrom() ---
+    if (g_ip_filter_fd >= 0)
+        close(g_ip_filter_fd);
+}
 
 int load_reputation(const char *path)
 {
@@ -33,11 +49,15 @@ void start_ip_filter()
         exit(1);
     }
 
+    // --- expose socket to stop-request path ---
+    g_ip_filter_fd = raw_fd;
+    g_ip_filter_stop = 0;
+
     printf("[LAYER_3] IP reputation filter active\n");
     printf("[LAYER_3] D3FEND: D3-ITF | ATT&CK: T1590\n");
     printf("[LAYER_3] Loaded %d reputation entries\n", reputation_entry_count());
 
-    while (1)
+    while (!g_ip_filter_stop)
     {
         // --- allocate task ---
         ip_task_t *task = calloc(1, sizeof(ip_task_t));
@@ -50,6 +70,8 @@ void start_ip_filter()
         if (task->packet_len < 0)
         {
             free(task);
+            if (g_ip_filter_stop)
+                break;
             continue;
         }
 
@@ -90,6 +112,16 @@ void start_ip_filter()
         }
         pthread_detach(thread_id);
     }
+
+    // --- close raw socket ---
+    if (g_ip_filter_fd >= 0)
+    {
+        close(g_ip_filter_fd);
+        g_ip_filter_fd = -1;
+    }
+
+    // --- cleanup shared state ---
+    ip_filter_cleanup();
 }
 
 void *handle_ip_packet(void *arg)

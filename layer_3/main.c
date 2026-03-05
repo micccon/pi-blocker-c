@@ -4,8 +4,7 @@
 static void handle_signal(int sig)
 {
     (void)sig;
-    ip_filter_cleanup();
-    exit(0);
+    request_ip_filter_stop();
 }
 
 int main()

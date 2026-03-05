@@ -41,6 +41,10 @@ typedef struct {
 // same role as start_session_tracker() and start_port_filter()
 void start_ip_filter();
 
+// signal-safe stop request
+// asks start_ip_filter() loop to exit cleanly
+void request_ip_filter_stop(void);
+
 // wrapper for common/reputation load path
 // returns number of entries loaded, -1 on failure
 int load_reputation(const char *path);

@@ -6,8 +6,7 @@
 static void handle_signal(int sig)
 {
     (void)sig;
-    enforce_cleanup();
-    exit(0);
+    request_port_filter_stop();
 }
 
 int main(void)

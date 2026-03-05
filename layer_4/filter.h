@@ -68,6 +68,10 @@ typedef struct {
 // same role as start_session_tracker() in Layer 5
 void start_port_filter();
 
+// signal-safe stop request
+// asks start_port_filter() loop to exit cleanly
+void request_port_filter_stop(void);
+
 // initializes hash table — zeros buckets, sets total_entries to 0, inits mutex
 // call once at startup before any lookups or inserts
 void port_scan_table_init(port_scan_table_t *table);

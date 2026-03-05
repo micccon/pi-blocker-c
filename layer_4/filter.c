@@ -1,7 +1,20 @@
 #include "filter.h"
+#include <signal.h>
 
 // --- global scan table ---
 static port_scan_table_t g_scan_table;
+static volatile sig_atomic_t g_port_filter_stop = 0;
+static int g_port_filter_fd = -1;
+
+void request_port_filter_stop(void)
+{
+    // --- request main loop shutdown ---
+    g_port_filter_stop = 1;
+
+    // --- close socket to unblock recvfrom() ---
+    if (g_port_filter_fd >= 0)
+        close(g_port_filter_fd);
+}
 
 // --- internal hash function ---
 static uint32_t hash_ip(uint32_t ip)
@@ -216,12 +229,16 @@ void start_port_filter()
         exit(1);
     }
 
+    // --- expose socket to stop-request path ---
+    g_port_filter_fd = raw_fd;
+    g_port_filter_stop = 0;
+
     printf("[LAYER_4] Port filter listening on all interfaces\n");
     printf("[LAYER_4] D3FEND: D3-NTCD | ATT&CK: T1046\n");
     printf("[LAYER_4] Threshold: %d unique ports per %d seconds\n",
            PORT_SCAN_THRESHOLD, PORT_SCAN_WINDOW_SECONDS);
 
-    while (1)
+    while (!g_port_filter_stop)
     {
         // --- allocate task ---
         port_task_t *task = calloc(1, sizeof(port_task_t));
@@ -234,6 +251,8 @@ void start_port_filter()
         if (task->packet_len < 0)
         {
             free(task);
+            if (g_port_filter_stop)
+                break;
             continue;
         }
 
@@ -298,6 +317,18 @@ void start_port_filter()
         }
         pthread_detach(thread_id);
     }
+
+    // --- close raw socket ---
+    if (g_port_filter_fd >= 0)
+    {
+        close(g_port_filter_fd);
+        g_port_filter_fd = -1;
+    }
+
+    // --- cleanup detector table and enforcement state ---
+    port_scan_table_cleanup(&g_scan_table);
+    enforce_cleanup();
+    printf("[LAYER_4] cleanup complete\n");
 }
 
 
