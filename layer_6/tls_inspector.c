@@ -5,7 +5,40 @@
 #include "tls_inspector.h"
 #include "../common/blocklist.h"
 #include "../common/net_hdrs.h"  // for struct ip_hdr and struct tcp_hdr
+#include "../common/enforce.h"   // for rst_inject()
 #include <ctype.h>
+
+// --- packet view helper ---
+// parse packet once into header pointers/lengths used by detection and enforcement
+static int parse_tls_packet_view(tls_task_t *task,
+                                 struct ip_hdr **ip_header, size_t *ip_hdr_len,
+                                 struct tcp_hdr **tcp_header, size_t *tcp_hdr_len,
+                                 unsigned char **tls_start, int *tls_len)
+{
+    if (!task || !ip_header || !ip_hdr_len || !tcp_header || !tcp_hdr_len || !tls_start || !tls_len)
+        return -1;
+
+    *ip_header = (struct ip_hdr *)task->buffer;
+    *ip_hdr_len = ((*ip_header)->version_ihl & 0x0F) * 4;
+    if (*ip_hdr_len < 20 || (int)(*ip_hdr_len) > task->packet_len)
+        return -1;
+
+    // --- ensure minimal TCP header exists before reading tcp fields ---
+    if (task->packet_len < (int)(*ip_hdr_len + sizeof(struct tcp_hdr)))
+        return -1;
+
+    *tcp_header = (struct tcp_hdr *)(task->buffer + *ip_hdr_len);
+    *tcp_hdr_len = (((*tcp_header)->data_offset & 0xF0) >> 4) * 4;
+    if (*tcp_hdr_len < 20 || (int)(*ip_hdr_len + *tcp_hdr_len) > task->packet_len)
+        return -1;
+
+    *tls_start = task->buffer + *ip_hdr_len + *tcp_hdr_len;
+    *tls_len = task->packet_len - (int)(*ip_hdr_len) - (int)(*tcp_hdr_len);
+    if (*tls_len < TLS_RECORD_HEADER_SIZE + TLS_HANDSHAKE_HEADER_SIZE)
+        return -1;
+
+    return 0;
+}
 
 void start_tls_inspector()
 {
@@ -38,16 +71,22 @@ void start_tls_inspector()
         }
 
         // --- validate and parse IP header ---
-        struct ip_hdr *ip_header = (struct ip_hdr *)task->buffer;
-        size_t ip_hdr_len = (ip_header->version_ihl & 0x0F) * 4;
-        if (ip_hdr_len < 20 || (int)ip_hdr_len > task->packet_len)
+        struct ip_hdr *ip_header;
+        struct tcp_hdr *tcp_header;
+        memset(&ip_header, 0, sizeof(ip_header));
+        memset(&tcp_header, 0, sizeof(tcp_header));
+        size_t ip_hdr_len, tcp_hdr_len = 0;
+        int tls_len = 0;
+        unsigned char *tls_start = NULL;
+
+        if (parse_tls_packet_view(task, &ip_header, &ip_hdr_len, &tcp_header,
+                                  &tcp_hdr_len, &tls_start, &tls_len) != 0)
         {
             free(task);
             continue;
         }
 
         // --- filter TLS on direct 443 and proxy 8080 ---
-        struct tcp_hdr *tcp_header = (struct tcp_hdr *)(task->buffer + ip_hdr_len);
         uint16_t dst_port = ntohs(tcp_header->dst_port);
         if (dst_port != HTTPS_PORT && dst_port != HTTP_PROXY_PORT)
         {
@@ -55,25 +94,14 @@ void start_tls_inspector()
             continue;
         }
 
-        // --- validate TCP header ---
-        size_t tcp_hdr_len = ((tcp_header->data_offset & 0xF0) >> 4) * 4;
-        if (tcp_hdr_len < 20 || (int)(ip_hdr_len + tcp_hdr_len) > task->packet_len)
-        {
-            free(task);
-            continue;
-        }
-
-        // --- fast filter: is this a TLS ClientHello? ---
-        unsigned char *tls_start = task->buffer + ip_hdr_len + tcp_hdr_len;
-        int tls_len = task->packet_len - (int)ip_hdr_len - (int)tcp_hdr_len;
-
+        // --- if is client hello, spawn thread to parse and enforce policy ---
         if (!is_tls_client_hello(tls_start, tls_len))
         {
             free(task);
             continue;
         }
 
-        // --- store raw_fd for RST injection (implement after Layer 4) ---
+        // --- store raw_fd for RST injection ---
         task->raw_fd = raw_fd;
 
         // --- spawn thread ---
@@ -349,45 +377,46 @@ tls_policy_verdict_t check_tls_policy(tls_task_t *task)
     return POLICY_PASS;
 }
 
-// ============================================================
-// enforce_block
-// Layer 4 enforcement hook
-// TODO: implement TCP RST injection after Layer 4 is complete
-// ============================================================
-
 void enforce_block(tls_task_t *task)
 {
-    char src_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &task->src_addr.sin_addr, src_ip, sizeof(src_ip));
-    printf("[LAYER_6] [ENFORCE] would RST connection from %s host=%s\n",
-           src_ip, task->hostname[0] ? task->hostname : "unknown");
+    /// -- currently only supports TCP RST injection for TLS blocks ---
+    //  --- Effective for blocking direct TLS but not TLS over HTTP proxies (port 8080) ---
+    struct ip_hdr *ip_header;
+    struct tcp_hdr *tcp_header;
+    unsigned char *tls_start;
+    size_t ip_hdr_len, tcp_hdr_len;
+    int tls_len;
+
+    if (parse_tls_packet_view(task, &ip_header, &ip_hdr_len,
+                              &tcp_header, &tcp_hdr_len,
+                              &tls_start, &tls_len) != 0)
+        return;
+
+    // ACK for RST: client seq + payload bytes in this segment
+    (void)tls_start;
+    int payload_len = task->packet_len - (int)ip_hdr_len - (int)tcp_hdr_len;
+    if (payload_len < 0) payload_len = 0;
+    uint32_t rst_ack_nbo = htonl(ntohl(tcp_header->seq_num) + (uint32_t)payload_len);
+
+    /// --- inject RST toward client ---
+    rst_inject(task->raw_fd,
+               ip_header->src_addr, ntohs(tcp_header->src_port),
+               ip_header->dst_addr, ntohs(tcp_header->dst_port),
+               rst_ack_nbo);
 }
 
 void *handle_tls_packet(void *arg)
 {
     tls_task_t *task = (tls_task_t *)arg;
 
-    // --- locate TLS payload within raw packet ---
-    struct ip_hdr *ip_header = (struct ip_hdr *)task->buffer;
-    size_t ip_hdr_len = (ip_header->version_ihl & 0x0F) * 4;
-    if (ip_hdr_len < 20 || (int)ip_hdr_len > task->packet_len)
-    {
-        free(task);
-        return NULL;
-    }
-
-    struct tcp_hdr *tcp_header = (struct tcp_hdr *)(task->buffer + ip_hdr_len);
-    size_t tcp_hdr_len = ((tcp_header->data_offset & 0xF0) >> 4) * 4;
-    if (tcp_hdr_len < 20 || (int)(ip_hdr_len + tcp_hdr_len) > task->packet_len)
-    {
-        free(task);
-        return NULL;
-    }
-
-    unsigned char *tls_start = task->buffer + ip_hdr_len + tcp_hdr_len;
-    int tls_len = task->packet_len - (int)ip_hdr_len - (int)tcp_hdr_len;
-
-    if (tls_len < TLS_RECORD_HEADER_SIZE + TLS_HANDSHAKE_HEADER_SIZE)
+    // --- parse packet view once ---
+    struct ip_hdr *ip_header;
+    struct tcp_hdr *tcp_header;
+    unsigned char *tls_start;
+    size_t ip_hdr_len, tcp_hdr_len;
+    int tls_len;
+    if (parse_tls_packet_view(task, &ip_header, &ip_hdr_len, &tcp_header,
+                              &tcp_hdr_len, &tls_start, &tls_len) != 0)
     {
         free(task);
         return NULL;
@@ -473,6 +502,8 @@ void log_policy_decision(tls_policy_verdict_t verdict, tls_task_t *task)
 
     if (localtime_r(&now, &tm_buf) != NULL)
         strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_buf);
+    else
+        strncpy(timestamp, "unknown-time", sizeof(timestamp));
 
     if (task)
         inet_ntop(AF_INET, &task->src_addr.sin_addr, src_ip, sizeof(src_ip));

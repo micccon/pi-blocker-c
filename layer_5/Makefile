@@ -1,7 +1,7 @@
 CC     = gcc
 CFLAGS = -Wall -Wextra -pthread
 
-SRC    = main.c session.c ../common/blocklist.c
+SRC    = main.c session.c ../common/blocklist.c ../common/enforce.c
 TARGET = session-inspector
 
 all: $(TARGET)

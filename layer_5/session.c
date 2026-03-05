@@ -1,4 +1,5 @@
 #include "session.h"
+#include "../common/enforce.h"
 
 // --- global session table ---
 // all threads share this one table
@@ -327,10 +328,16 @@ void *handle_session_packet(void *arg)
 
 void session_enforce_block(uint32_t src_ip)
 {
+    // --- call shared enforcement engine ---
+    // src_ip is already in network byte order
+    if (block_ip(src_ip) == 0)
+        return;
+
+    // --- fallback log on failure ---
     char ip_str[INET_ADDRSTRLEN];
     struct in_addr addr = { .s_addr = src_ip };
     inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
-    printf("[LAYER_5] [ENFORCE] would block %s\n", ip_str);
+    fprintf(stderr, "[LAYER_5] [ENFORCE] failed to block %s\n", ip_str);
 }
 
 void log_session_decision(const char *action, session_task_t *task,

@@ -111,8 +111,7 @@ void* handle_session_packet(void *arg);
 void log_session_decision(const char *action, session_task_t *task,
                           uint32_t src_ip, int syn_count);
 
-// Layer 4 enforcement hook — same pattern as Layer 6
-// TODO: implement after Layer 4
+// enforcement hook — delegates IP blocking action to common/enforce
 void session_enforce_block(uint32_t src_ip);
 
 #endif

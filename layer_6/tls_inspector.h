@@ -139,16 +139,6 @@ int extract_sni(unsigned char *buffer, int len,
 // calls is_tls_client_hello() → extract_sni() → is_blocked() → log
 void* handle_tls_packet(void *arg);
 
-// structured log line — same format as Layer 7
-// [TIMESTAMP] [LAYER_6] [TLS] [BLOCKED/ALLOWED] host=X src=X d3fend=D3-TLSIC attck=T1573
-void log_decision(const char *action, tls_task_t *task);
-
-// sends a TCP RST to terminate a connection
-// call this after detecting a blocked SNI
-// raw_fd   — your existing raw socket from start_tls_inspector()
-// task     — the captured packet task
-void send_tcp_rst(int raw_fd, tls_task_t *task);
-
 // replaces is_tls_client_hello() — parses ClientHello and fills task metadata
 // returns 1 if ClientHello, 0 if not
 int parse_client_hello(unsigned char *buffer, int len, tls_task_t *task);
