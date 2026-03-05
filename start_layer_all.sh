@@ -3,14 +3,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-extract_layer_number() {
-    local base="$1"
-    local layer="${base#start_layer}"
-    layer="${layer%.sh}"
-    layer="${layer#_}"
-    printf '%s\n' "$layer"
-}
-
 # Discover scripts like start_layer1.sh, start_layer_5.sh, start_layer7.sh.
 # This avoids updating this script as new layers are added.
 mapfile -t scripts < <(
@@ -68,24 +60,6 @@ if [[ ${#selected_scripts[@]} -eq 0 ]]; then
     echo "No requested layers could be started."
     exit 0
 fi
-
-# --- show resolved launch plan ---
-if [[ $# -eq 0 ]]; then
-    echo "Requested layers: all discovered"
-else
-    echo "Requested layers: $*"
-fi
-echo "Resolved scripts:"
-for rel_script in "${selected_scripts[@]}"; do
-    echo "  - $rel_script"
-done
-
-# --- cleanup stale layer processes ---
-# prevents old runs from continuing to print logs (e.g., lingering Layer 3)
-stale_regex='ip-filter|port-filter|arp-monitor|session-inspector|tls-inspector|dns-filter|http-proxy'
-pkill -TERM -f "$stale_regex" 2>/dev/null || true
-sleep 0.2
-pkill -KILL -f "$stale_regex" 2>/dev/null || true
 
 pids=()
 
