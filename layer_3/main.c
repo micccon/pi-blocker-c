@@ -8,7 +8,7 @@ static void handle_signal(int sig)
     exit(0);
 }
 
-int main(int argc, char *argv[])
+int main()
 {
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);

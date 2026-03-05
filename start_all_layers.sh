@@ -23,6 +23,43 @@ if [[ ${#layer_scripts[@]} -eq 0 ]]; then
     exit 0
 fi
 
+# Map: layer number -> script path
+declare -A script_for_layer
+for rel_script in "${layer_scripts[@]}"; do
+    base="$(basename "$rel_script")"       # start_layer5.sh or start_layer_5.sh
+    layer="${base#start_layer}"            # 5.sh or _5.sh
+    layer="${layer%.sh}"                   # 5 or _5
+    layer="${layer#_}"                     # 5
+    script_for_layer["$layer"]="$rel_script"
+done
+
+# Build run list:
+# - no args: run all discovered layers
+# - args: run only requested layers
+selected_scripts=()
+if [[ $# -eq 0 ]]; then
+    while IFS= read -r layer; do
+        selected_scripts+=("${script_for_layer[$layer]}")
+    done < <(printf '%s\n' "${!script_for_layer[@]}" | sort -n)
+else
+    for req in "$@"; do
+        if [[ ! "$req" =~ ^[0-9]+$ ]]; then
+            echo "Invalid layer '$req' (expected numeric layer like 1 2 4 7)"
+            exit 1
+        fi
+        if [[ -n "${script_for_layer[$req]:-}" ]]; then
+            selected_scripts+=("${script_for_layer[$req]}")
+        else
+            echo "Skipping layer $req (no start script found)"
+        fi
+    done
+fi
+
+if [[ ${#selected_scripts[@]} -eq 0 ]]; then
+    echo "No requested layers could be started."
+    exit 0
+fi
+
 pids=()
 
 cleanup() {
@@ -37,7 +74,7 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
-for rel_script in "${layer_scripts[@]}"; do
+for rel_script in "${selected_scripts[@]}"; do
     script_dir="$ROOT_DIR/$(dirname "$rel_script")"
     script_name="$(basename "$rel_script")"
 
