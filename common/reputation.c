@@ -65,30 +65,13 @@ int reputation_load(const char *path)
         // --- strip trailing newline (handles LF and CRLF) ---
         line[strcspn(line, "\r\n")] = '\0';
 
-        // --- trim leading whitespace ---
-        char *trimmed = line;
-        while (*trimmed == ' ' || *trimmed == '\t')
-            trimmed++;
-
-        if (strchr(trimmed, '/'))  // CIDR range
+        if (strchr(line, '/'))  // CIDR range
         {
             // --- split on slash ---
-            char *slash = strchr(trimmed, '/');
+            char *slash = strchr(line, '/');
             *slash = '\0';
-            char *network_str = trimmed;
+            char *network_str = line;
             char *prefix_str = slash + 1;
-
-            char *network_end = network_str + strlen(network_str);
-            while (network_end > network_str &&
-                   (network_end[-1] == ' ' || network_end[-1] == '\t'))
-                *--network_end = '\0';
-
-            while (*prefix_str == ' ' || *prefix_str == '\t')
-                prefix_str++;
-            char *prefix_end = prefix_str + strlen(prefix_str);
-            while (prefix_end > prefix_str &&
-                   (prefix_end[-1] == ' ' || prefix_end[-1] == '\t'))
-                *--prefix_end = '\0';
 
             // --- parse network address ---
             struct in_addr addr;
@@ -107,13 +90,13 @@ int reputation_load(const char *path)
         else  // single IP
         {
             // --- trim trailing whitespace for single IP line ---
-            char *ip_end = trimmed + strlen(trimmed);
-            while (ip_end > trimmed && (ip_end[-1] == ' ' || ip_end[-1] == '\t'))
+            char *ip_end = line + strlen(line);
+            while (ip_end > line && (ip_end[-1] == ' ' || ip_end[-1] == '\t'))
                 *--ip_end = '\0';
 
             // --- parse IP address ---
             struct in_addr addr;
-            if (inet_pton(AF_INET, trimmed, &addr) != 1)
+            if (inet_pton(AF_INET, line, &addr) != 1)
                 continue;
 
             // --- store as /32 in global list ---

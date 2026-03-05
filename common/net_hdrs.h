@@ -2,6 +2,11 @@
 #define NET_HEADERS_H
 
 #include <stdint.h>
+#include <linux/if_ether.h>
+
+// ethertype constants
+#define ETHERTYPE_ARP   0x0806
+#define ETHERTYPE_IPV4  0x0800
 
 // RFC 791 — IP header
 struct ip_hdr {
@@ -61,8 +66,24 @@ struct tls_handshake_hdr {
     uint8_t length[3];
 } __attribute__((packed));
 
-// Layer 2 structs — fill in when you get there
-// struct eth_hdr
-// struct arp_pkt
+// Ethernet header — IEEE 802.3
+struct eth_hdr {
+    uint8_t dst_mac[6];
+    uint8_t src_mac[6];
+    uint16_t ethertype; // e.g., 0x0800 for IPv4
+} __attribute__((packed));
+
+// ARP packet — RFC 826
+struct arp_pkt {
+    uint16_t htype;       // hardware type (1 for Ethernet)
+    uint16_t ptype;       // protocol type (0x0800 for IPv4)
+    uint8_t hlen;         // hardware address length (6 for Ethernet)
+    uint8_t plen;         // protocol address length (4 for IPv4)   
+    uint16_t oper;        // operation (1 for request, 2 for reply)
+    uint8_t sha[6];       // sender hardware address (MAC)
+    uint32_t spa;         // sender protocol address (IP)
+    uint8_t tha[6];       // target hardware address (MAC)
+    uint32_t tpa;         // target protocol address (IP)
+} __attribute__((packed));    
 
 #endif

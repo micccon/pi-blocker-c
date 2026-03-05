@@ -26,7 +26,7 @@ void ip_filter_cleanup()
 void start_ip_filter()
 {
     // --- create raw socket ---
-    int raw_fd = socket(AF_INET, SOCK_RAW, IPPROTO_IP);
+    int raw_fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_IP));
     if (raw_fd < 0)
     {
         perror("Failed to create raw socket (are you root?)");
@@ -54,13 +54,12 @@ void start_ip_filter()
         }
 
         // --- validate IP header ---
-        if (task->packet_len < (int)sizeof(struct ip_hdr))
+        if (task->packet_len < (int)(sizeof(struct eth_hdr) + sizeof(struct ip_hdr)))
         {
             free(task);
             continue;
         }
-
-        struct ip_hdr *ip_header = (struct ip_hdr *)task->buffer;
+        struct ip_hdr *ip_header = (struct ip_hdr *)(task->buffer + sizeof(struct eth_hdr));
         size_t ip_hdr_len = (ip_header->version_ihl & 0x0F) * 4;
         if (ip_hdr_len < 20 || (int)ip_hdr_len > task->packet_len)
         {
@@ -98,7 +97,7 @@ void *handle_ip_packet(void *arg)
     ip_task_t *task = (ip_task_t *)arg;
 
     // --- extract src_ip ---
-    struct ip_hdr *ip_header = (struct ip_hdr *)task->buffer;
+    struct ip_hdr *ip_header = (struct ip_hdr *)(task->buffer + sizeof(struct eth_hdr));
     uint32_t src_ip = ip_header->src_addr;  // network byte order
 
     // --- check reputation ---
