@@ -11,21 +11,6 @@ extract_layer_number() {
     printf '%s\n' "$layer"
 }
 
-wants_layer() {
-    local layer="$1"
-
-    if [[ ${REQUEST_ALL:-0} -eq 1 ]]; then
-        return 0
-    fi
-
-    for req in "${REQUESTED_LAYERS[@]}"; do
-        if [[ "$req" == "$layer" ]]; then
-            return 0
-        fi
-    done
-    return 1
-}
-
 # Discover scripts like start_layer1.sh, start_layer_5.sh, start_layer7.sh.
 # This avoids updating this script as new layers are added.
 mapfile -t scripts < <(
@@ -46,44 +31,33 @@ if [[ ${#layer_scripts[@]} -eq 0 ]]; then
     exit 0
 fi
 
-# Build run list:
-# - no args: run all discovered layers
-# - args: run only requested layers
 selected_scripts=()
 if [[ $# -eq 0 ]]; then
-    REQUEST_ALL=1
-    REQUESTED_LAYERS=()
+    for rel_script in "${layer_scripts[@]}"; do
+        selected_scripts+=("$rel_script")
+    done
 else
-    REQUEST_ALL=0
-    REQUESTED_LAYERS=()
     for req in "$@"; do
         if [[ ! "$req" =~ ^[0-9]+$ ]]; then
             echo "Invalid layer '$req' (expected numeric layer like 1 2 4 7)"
             exit 1
         fi
-        REQUESTED_LAYERS+=("$req")
-    done
-fi
 
-for rel_script in "${layer_scripts[@]}"; do
-    base="$(basename "$rel_script")"
-    layer="$(extract_layer_number "$base")"
-    if wants_layer "$layer"; then
-        selected_scripts+=("$rel_script")
-    fi
-done
+        layer_dir="$ROOT_DIR/layer_$req"
+        if [[ ! -d "$layer_dir" ]]; then
+            echo "Skipping layer $req (directory not found)"
+            continue
+        fi
 
-if [[ ${REQUEST_ALL:-0} -eq 0 ]]; then
-    for req in "${REQUESTED_LAYERS[@]}"; do
         found=0
-        for rel_script in "${selected_scripts[@]}"; do
-            base="$(basename "$rel_script")"
-            layer="$(extract_layer_number "$base")"
-            if [[ "$layer" == "$req" ]]; then
+        while IFS= read -r abs_script; do
+            base="$(basename "$abs_script")"
+            if [[ "$base" =~ ^start_layer_?[0-9]+\.sh$ ]]; then
+                selected_scripts+=("${abs_script#$ROOT_DIR/}")
                 found=1
-                break
             fi
-        done
+        done < <(find "$layer_dir" -maxdepth 1 -type f -name 'start_layer*.sh' | sort)
+
         if [[ $found -eq 0 ]]; then
             echo "Skipping layer $req (no start script found)"
         fi
