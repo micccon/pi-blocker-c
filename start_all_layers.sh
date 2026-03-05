@@ -60,6 +60,17 @@ if [[ ${#selected_scripts[@]} -eq 0 ]]; then
     exit 0
 fi
 
+# --- show resolved launch plan ---
+if [[ $# -eq 0 ]]; then
+    echo "Requested layers: all discovered"
+else
+    echo "Requested layers: $*"
+fi
+echo "Resolved scripts:"
+for rel_script in "${selected_scripts[@]}"; do
+    echo "  - $rel_script"
+done
+
 # --- cleanup stale layer processes ---
 # prevents old runs from continuing to print logs (e.g., lingering Layer 3)
 stale_regex='ip-filter|port-filter|arp-monitor|session-inspector|tls-inspector|dns-filter|http-proxy'
