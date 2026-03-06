@@ -41,8 +41,8 @@ void start_dns_server(const char *upstream_ip)
 		exit(1);
 	}
 
-	printf("Pi-Blocker is listening on 0.0.0.0:%d (All Interfaces)\n", DNS_PORT);
-	printf("Waiting for incoming DNS queries...\n");
+	printf("[LAYER_7] [DNS] Listening on 0.0.0.0:%d\n", DNS_PORT);
+	printf("[LAYER_7] [DNS] Waiting for incoming DNS queries...\n");
 
 	// Main loop process
 	while(1)

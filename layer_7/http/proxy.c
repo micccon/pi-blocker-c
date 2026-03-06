@@ -49,7 +49,7 @@ void start_proxy_server()
         exit(1);
     }
 
-    printf("HTTP Proxy listening on 0.0.0.0:%d\n", HTTP_PORT);
+    printf("[LAYER_7] [HTTP] Listening on 0.0.0.0:%d\n", HTTP_PORT);
 
     // --- accept loop ---
     while (1)

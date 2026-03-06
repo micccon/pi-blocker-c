@@ -6,11 +6,11 @@
 int main(void)
 {
     // --- load the blocklist ---
+    printf("[LAYER_7] [HTTP] Loading blocklist...\n");
     if (load_blocklist("../../hostnames/blocklist.txt") != 0)
         return 1;
 
-    printf("HTTP Proxy Server is starting...\n");
-    printf("Listening on port 8080\n");
+    printf("[LAYER_7] [HTTP] Starting HTTP proxy server...\n");
 
     // --- start the proxy ---
     start_proxy_server();
