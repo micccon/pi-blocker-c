@@ -41,6 +41,9 @@ typedef struct {
 // same role as start_session_tracker() and start_port_filter()
 void start_ip_filter();
 
+// enable or disable verbose per-packet allowed logging
+void ip_filter_set_verbose(bool verbose);
+
 // signal-safe stop request
 // asks start_ip_filter() loop to exit cleanly
 void request_ip_filter_stop(void);

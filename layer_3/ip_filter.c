@@ -5,6 +5,12 @@
 // set by signal handler path in main.c
 static volatile sig_atomic_t g_ip_filter_stop = 0;
 static int g_ip_filter_fd = -1;
+static bool g_ip_filter_verbose = false;
+
+void ip_filter_set_verbose(bool verbose)
+{
+    g_ip_filter_verbose = verbose;
+}
 
 void request_ip_filter_stop(void)
 {
@@ -141,7 +147,7 @@ void *handle_ip_packet(void *arg)
         block_ip(src_ip);
         log_ip_decision("BLOCKED", task, src_ip);
     }
-    else
+    else if (g_ip_filter_verbose)
         log_ip_decision("ALLOWED", task, src_ip);
 
     free(task);

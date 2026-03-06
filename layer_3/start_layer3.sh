@@ -5,7 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     echo "Run as root so Layer 3 can open a raw socket:"
-    echo "  sudo ./start_layer3.sh"
+    echo "  sudo ./start_layer3.sh        # blocked only"
+    echo "  sudo ./start_layer3.sh -v     # blocked + allowed"
     exit 1
 fi
 
