@@ -120,8 +120,8 @@ void start_ip_filter()
         g_ip_filter_fd = -1;
     }
 
-    // --- cleanup shared state ---
-    ip_filter_cleanup();
+    // --- do not free shared globals here ---
+    // detached workers may still be using reputation/enforce state
 }
 
 void *handle_ip_packet(void *arg)

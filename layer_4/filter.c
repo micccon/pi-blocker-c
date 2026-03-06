@@ -325,10 +325,8 @@ void start_port_filter()
         g_port_filter_fd = -1;
     }
 
-    // --- cleanup detector table and enforcement state ---
-    port_scan_table_cleanup(&g_scan_table);
-    enforce_cleanup();
-    printf("[LAYER_4] cleanup complete\n");
+    // --- do not destroy shared state here ---
+    // detached workers may still be using the scan table and enforce globals
 }
 
 

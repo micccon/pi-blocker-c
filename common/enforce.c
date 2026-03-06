@@ -67,6 +67,13 @@ static int ensure_chain_ready_locked(void)
     if (run_cmd(cmd) != 0)
         return -1;
 
+    // --- ensure INPUT jumps into dedicated chain ---
+    snprintf(cmd, sizeof(cmd),
+             "iptables -C INPUT -j %s >/dev/null 2>&1 || iptables -A INPUT -j %s",
+             ENFORCE_CHAIN_NAME, ENFORCE_CHAIN_NAME);
+    if (run_cmd(cmd) != 0)
+        return -1;
+
     // --- ensure FORWARD jumps into dedicated chain ---
     snprintf(cmd, sizeof(cmd),
              "iptables -C FORWARD -j %s >/dev/null 2>&1 || iptables -A FORWARD -j %s",
@@ -535,6 +542,12 @@ void enforce_cleanup(void)
     // --- one-time init + lock ---
     pthread_once(&g_enforce_once, enforce_once_init);
     pthread_mutex_lock(&g_enforce_lock);
+
+    // --- unlink chain from INPUT if present ---
+    snprintf(cmd, sizeof(cmd),
+             "iptables -D INPUT -j %s >/dev/null 2>&1 || true",
+             ENFORCE_CHAIN_NAME);
+    run_cmd(cmd);
 
     // --- unlink chain from FORWARD if present ---
     snprintf(cmd, sizeof(cmd),

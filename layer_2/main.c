@@ -5,8 +5,7 @@
 static void handle_signal(int sig)
 {
     (void)sig;
-    arp_table_cleanup();
-    exit(0);
+    _exit(0);
 }
 
 int main()
