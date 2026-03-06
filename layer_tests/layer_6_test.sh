@@ -37,9 +37,9 @@ ip -n "$NS_NAME" addr add "$NS_IP/24" dev "$NS_IF"
 ip -n "$NS_NAME" link set "$NS_IF" up
 
 TARGET_PORT=""
-if ss -ltn '( sport = :8080 )' 2>/dev/null | rg -q ':8080'; then
+if ss -ltn '( sport = :8080 )' 2>/dev/null | grep -q ':8080'; then
     TARGET_PORT="8080"
-elif ss -ltn '( sport = :443 )' 2>/dev/null | rg -q ':443'; then
+elif ss -ltn '( sport = :443 )' 2>/dev/null | grep -q ':443'; then
     TARGET_PORT="443"
 else
     echo "No listener on port 8080 or 443. Start Layer 7 HTTP proxy or another service first."
