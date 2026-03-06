@@ -50,28 +50,26 @@ if [[ -z "$BLOCKED_SRC_IP" ]]; then
     exit 1
 fi
 
-if [[ -z "$CIDR_ENTRY" ]]; then
-    echo "Could not find a CIDR entry in $REP_FILE"
-    exit 1
-fi
+CIDR_TEST_IP=""
+if [[ -n "$CIDR_ENTRY" ]]; then
+    cidr_network="${CIDR_ENTRY%/*}"
+    cidr_prefix="${CIDR_ENTRY#*/}"
 
-cidr_network="${CIDR_ENTRY%/*}"
-cidr_prefix="${CIDR_ENTRY#*/}"
+    IFS=. read -r o1 o2 o3 o4 <<< "$cidr_network"
+    cidr_ip_int=$(( (o1 << 24) | (o2 << 16) | (o3 << 8) | o4 ))
 
-IFS=. read -r o1 o2 o3 o4 <<< "$cidr_network"
-cidr_ip_int=$(( (o1 << 24) | (o2 << 16) | (o3 << 8) | o4 ))
-
-if (( cidr_prefix >= 32 )); then
-    CIDR_TEST_IP="$cidr_network"
-else
-    CIDR_TEST_IP_INT=$(( cidr_ip_int + 1 ))
-    CIDR_TEST_IP="$(
-        printf '%d.%d.%d.%d' \
-            $(( (CIDR_TEST_IP_INT >> 24) & 255 )) \
-            $(( (CIDR_TEST_IP_INT >> 16) & 255 )) \
-            $(( (CIDR_TEST_IP_INT >> 8) & 255 )) \
-            $(( CIDR_TEST_IP_INT & 255 ))
-    )"
+    if (( cidr_prefix >= 32 )); then
+        CIDR_TEST_IP="$cidr_network"
+    else
+        CIDR_TEST_IP_INT=$(( cidr_ip_int + 1 ))
+        CIDR_TEST_IP="$(
+            printf '%d.%d.%d.%d' \
+                $(( (CIDR_TEST_IP_INT >> 24) & 255 )) \
+                $(( (CIDR_TEST_IP_INT >> 16) & 255 )) \
+                $(( (CIDR_TEST_IP_INT >> 8) & 255 )) \
+                $(( CIDR_TEST_IP_INT & 255 ))
+        )"
+    fi
 fi
 
 cleanup() {
@@ -82,8 +80,12 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[TEST][L3] Using blocked source IP from reputation feed: $BLOCKED_SRC_IP"
-echo "[TEST][L3] Using blocked CIDR from reputation feed: $CIDR_ENTRY"
-echo "[TEST][L3] Using CIDR test source IP: $CIDR_TEST_IP"
+if [[ -n "$CIDR_ENTRY" ]]; then
+    echo "[TEST][L3] Using blocked CIDR from reputation feed: $CIDR_ENTRY"
+    echo "[TEST][L3] Using CIDR test source IP: $CIDR_TEST_IP"
+else
+    echo "[TEST][L3] No CIDR entry found, skipping CIDR test"
+fi
 
 echo "[TEST][L3] Creating namespace and veth pair"
 ip netns add "$NS_NAME"
@@ -99,6 +101,8 @@ ip netns exec "$NS_NAME" ip link set "$NS_VETH" up
 
 echo "[TEST][L3] Sending spoofed TCP SYN packets from $BLOCKED_SRC_IP to $TARGET_IP"
 ip netns exec "$NS_NAME" hping3 -q -c 5 -S -p 443 -a "$BLOCKED_SRC_IP" "$TARGET_IP" >/dev/null 2>&1 || true
-echo "[TEST][L3] Sending spoofed TCP SYN packets from $CIDR_TEST_IP to $TARGET_IP"
-ip netns exec "$NS_NAME" hping3 -q -c 5 -S -p 443 -a "$CIDR_TEST_IP" "$TARGET_IP" >/dev/null 2>&1 || true
+if [[ -n "$CIDR_TEST_IP" ]]; then
+    echo "[TEST][L3] Sending spoofed TCP SYN packets from $CIDR_TEST_IP to $TARGET_IP"
+    ip netns exec "$NS_NAME" hping3 -q -c 5 -S -p 443 -a "$CIDR_TEST_IP" "$TARGET_IP" >/dev/null 2>&1 || true
+fi
 sleep 1
