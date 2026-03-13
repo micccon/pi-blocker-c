@@ -32,7 +32,7 @@ ip -n "$NS_NAME" addr add "$NS_IP/24" dev "$NS_IF"
 ip -n "$NS_NAME" link set "$NS_IF" up
 
 echo "[TEST][L5] Sending repeated SYN attempts from namespace to $HOST_IP:$TARGET_PORT"
-for _ in $(seq 1 20); do
+for _ in $(seq 1 25); do
     ip netns exec "$NS_NAME" timeout 1 bash -c "echo >/dev/tcp/$HOST_IP/$TARGET_PORT" >/dev/null 2>&1 || true
 done
 sleep 1
