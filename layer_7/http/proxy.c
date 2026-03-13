@@ -176,8 +176,40 @@ int parse_http_request(char *buffer, http_task_t *task)
     }
     if (host_start == NULL)
     {
-        fprintf(stderr, "Host header not found in HTTP request\n");
-        return -1;
+        // HTTP/1.0 CONNECT may not include Host header
+        // extract host from the URL directly for CONNECT
+        if (strcasecmp(method, "CONNECT") == 0)
+        {
+            // URL is "127.0.0.1:22" — parse it directly
+            strncpy(task->hostname, url, MAX_HOSTNAME_LENGTH - 1);
+            task->hostname[MAX_HOSTNAME_LENGTH - 1] = '\0';
+
+            // strip port
+            char *colon = strchr(task->hostname, ':');
+            if (colon != NULL)
+            {
+                char *endptr;
+                long port = strtol(colon + 1, &endptr, 10);
+                if (*endptr == '\0' && port > 0 && port <= 65535)
+                    task->port = (int)port;
+                else
+                    task->port = 443;
+                *colon = '\0';
+            }
+            else
+                task->port = 443;
+
+            // --- lowercase the host ---
+            for (int i = 0; task->hostname[i]; i++)
+                task->hostname[i] = (char)tolower((unsigned char)task->hostname[i]);
+
+            return 0;
+        }
+        else
+        {
+            fprintf(stderr, "Host header not found in HTTP request\n");
+            return -1;
+        }
     }
 
     // --- extract hostname ---
