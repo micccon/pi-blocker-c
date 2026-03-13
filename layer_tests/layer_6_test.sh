@@ -50,5 +50,6 @@ echo "[TEST][L6] Sending a TLS 1.0 ClientHello from namespace to $HOST_IP:$TARGE
 ip netns exec "$NS_NAME" timeout 8 openssl s_client \
     -connect "${HOST_IP}:${TARGET_PORT}" \
     -tls1 \
+    -cipher 'DEFAULT:@SECLEVEL=0' \
     -servername "$TLS_SNI" </dev/null >/dev/null 2>&1 || true
 sleep 1

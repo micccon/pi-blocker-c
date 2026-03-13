@@ -23,7 +23,7 @@
 #define SESSION_WINDOW_SECONDS  60
 
 // max SYNs from one IP within the window before flagging as flood
-#define SESSION_SYN_THRESHOLD   80
+#define SESSION_SYN_THRESHOLD   20
 
 // max total entries across all buckets
 #define SESSION_MAX_ENTRIES     4096
